@@ -27,6 +27,7 @@ DB_PATH = os.getenv("DB_PATH", "data/radar.db")
 GSOC_YEARS_ENV = os.getenv("GSOC_YEARS", "2022,2023,2024,2025,2026")
 GSOC_YEARS = [int(y.strip()) for y in GSOC_YEARS_ENV.split(",") if y.strip().isdigit()]
 LOOKBACK_DAYS = int(os.getenv("LOOKBACK_DAYS", 30))
+MAX_REPOS_PER_ORG = int(os.getenv("MAX_REPOS_PER_ORG", 20))
 
 TARGET_ORGANIZATIONS = [
     "jenkins-infra",

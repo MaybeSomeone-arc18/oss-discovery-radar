@@ -1,26 +1,23 @@
 import sys
 import argparse
+import json
 from src.github_client import fetch_issues
 from src.triage_engine import generate_digest
 from src.gsoc_collector import fetch_gsoc_organizations
-from src.database import get_stats, init_db
+from src.database import get_stats, init_db, get_connection
+from src.github_collector import fetch_organization_intelligence
+from src.scoring_engine import calculate_organization_scores
 
 def cmd_issues():
     print("Starting OSS Discovery Radar (Issue Pipeline)...")
-    print("Fetching issues from GitHub API...")
-    
     try:
         issues = fetch_issues()
         print(f"Found {len(issues)} matching issues.")
-        
-        print("Running triage engine, persisting to DB, and generating digest...")
         digest_path = generate_digest(issues)
-        
         if digest_path:
             print(f"Pipeline completed successfully. Check {digest_path} for opportunities!")
         else:
             print("Pipeline completed. No digest generated as no issues matched criteria.")
-            
     except Exception as e:
         print(f"Error executing pipeline: {e}", file=sys.stderr)
         sys.exit(1)
@@ -35,18 +32,78 @@ def cmd_status():
     for key, value in stats.items():
         print(f"  {key.capitalize()}: {value}")
 
+def cmd_intel():
+    fetch_organization_intelligence()
+    calculate_organization_scores()
+
+def cmd_orgs():
+    init_db()
+    with get_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute('''
+        SELECT slug, name, opportunity_score 
+        FROM organizations 
+        WHERE opportunity_score IS NOT NULL
+        ORDER BY opportunity_score DESC
+        ''')
+        rows = cursor.fetchall()
+        
+        if not rows:
+            print("No organization intelligence data found. Run 'python main.py intel' first.")
+            return
+            
+        print(f"{'Rank':<5} | {'Organization':<30} | {'Score':<10}")
+        print("-" * 55)
+        for i, row in enumerate(rows, 1):
+            score = f"{row[2]:.2f}" if row[2] is not None else "N/A"
+            print(f"{i:<5} | {row[1][:30]:<30} | {score:<10}")
+
+def cmd_org(slug):
+    init_db()
+    with get_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute("SELECT name, opportunity_score, score_breakdown FROM organizations WHERE slug = ?", (slug,))
+        org = cursor.fetchone()
+        
+        if not org:
+            print(f"Organization '{slug}' not found.")
+            return
+            
+        print(f"=== Report for {org[0]} ({slug}) ===")
+        score = f"{org[1]:.2f}" if org[1] is not None else "N/A"
+        print(f"Opportunity Score: {score}")
+        
+        if org[2]:
+            print("\nScore Breakdown:")
+            breakdown = json.loads(org[2])
+            for k, v in breakdown.items():
+                print(f"  {k}: {v}")
+                
+        # Repositories
+        cursor.execute('''
+        SELECT name, stars, forks, open_issues, open_prs
+        FROM repositories WHERE org_slug = ?
+        ORDER BY CAST(stars AS INTEGER) DESC LIMIT 5
+        ''', (slug,))
+        repos = cursor.fetchall()
+        
+        if repos:
+            print("\nTop Repositories:")
+            for r in repos:
+                print(f"  - {r[0]} (Stars: {r[1]}, Forks: {r[2]}, Issues: {r[3]}, PRs: {r[4]})")
+
 def main():
     parser = argparse.ArgumentParser(description="OSS Discovery Radar")
     subparsers = parser.add_subparsers(dest="command", required=True)
     
-    # Subcommand: issues
     subparsers.add_parser("issues", help="Runs the existing GitHub issue pipeline.")
-    
-    # Subcommand: gsoc
     subparsers.add_parser("gsoc", help="Fetches/updates GSoC historical data and stores it in SQLite.")
-    
-    # Subcommand: status
     subparsers.add_parser("status", help="Prints useful database statistics.")
+    subparsers.add_parser("intel", help="Runs the Organization Intelligence Engine (GitHub collection + Scoring).")
+    subparsers.add_parser("orgs", help="Prints a ranked table of organizations by opportunity score.")
+    
+    org_parser = subparsers.add_parser("org", help="Prints a detailed report for one organization.")
+    org_parser.add_argument("slug", help="Organization slug/name")
     
     args = parser.parse_args()
     
@@ -56,6 +113,12 @@ def main():
         cmd_gsoc()
     elif args.command == "status":
         cmd_status()
+    elif args.command == "intel":
+        cmd_intel()
+    elif args.command == "orgs":
+        cmd_orgs()
+    elif args.command == "org":
+        cmd_org(args.slug)
 
 if __name__ == "__main__":
     main()
