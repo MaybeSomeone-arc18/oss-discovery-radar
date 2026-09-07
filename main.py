@@ -98,6 +98,54 @@ def cmd_analyze(issue_id_or_url):
     brief = generate_contribution_brief(issue_dict, repo_dict, profile)
     print(brief)
 
+def cmd_research(issue_id):
+    from src.database import init_db
+    init_db()
+    from src.hermes_agent import research
+    research(issue_id)
+
+def cmd_plan(issue_id):
+    from src.database import init_db
+    init_db()
+    from src.hermes_agent import plan
+    plan(issue_id)
+
+def cmd_implement(issue_id, auto_yes=False):
+    from src.database import init_db
+    init_db()
+    if not auto_yes:
+        print("WARNING:")
+        print("This will allow Hermes to modify code in a LOCAL isolated worktree.")
+        print("No GitHub writes will occur.")
+        print("\nProceed? [y/N]")
+        choice = input().strip().lower()
+        if choice not in ['y', 'yes']:
+            print("Implementation aborted.")
+            return
+
+    from src.implementer import implement
+    implement(issue_id)
+
+def cmd_review(issue_id):
+    from src.implementer import review
+    review(issue_id)
+
+def cmd_workspace(issue_id):
+    from src.implementer import show_workspace
+    show_workspace(issue_id)
+
+def cmd_cleanup(issue_id):
+    print(f"WARNING: This will safely remove the isolated worktree for issue {issue_id}.")
+    print("Reports and patches will be preserved.")
+    print("\nProceed? [y/N]")
+    choice = input().strip().lower()
+    if choice not in ['y', 'yes']:
+        print("Cleanup aborted.")
+        return
+        
+    from src.implementer import cleanup_issue_workspace
+    cleanup_issue_workspace(issue_id)
+
 def cmd_gsoc():
     fetch_gsoc_organizations()
 
@@ -107,6 +155,13 @@ def cmd_status():
     print("Database Status:")
     for key, value in stats.items():
         print(f"  {key.capitalize()}: {value}")
+        
+    print("\nOpportunity Lifecycle Status:")
+    with get_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute("SELECT lifecycle_status, COUNT(*) FROM issues GROUP BY lifecycle_status")
+        for status, count in cursor.fetchall():
+            print(f"  {status or 'UNKNOWN'}: {count}")
 
 def cmd_intel():
     fetch_organization_intelligence()
@@ -227,6 +282,74 @@ def cmd_sync_issues(limit=20):
     fetch_contributions(limit=limit)
     score_and_classify_issues()
 
+def cmd_daily():
+    from src.opportunity_manager import generate_daily_shortlist
+    from src.database import init_db
+    init_db()
+    opps = generate_daily_shortlist(limit=10)
+    if not opps:
+        print("No new/watched opportunities available.")
+        return
+    print(f"{'Rank':<4} | {'Org':<15} | {'Repo':<20} | {'Issue':<6} | {'Val':<4} | {'GSoC':<4} | {'Fit':<4} | {'Action'}")
+    print("-" * 110)
+    for i, o in enumerate(opps, 1):
+        cval = f"{o['c_val']:.1f}" if o['c_val'] else "N/A"
+        gsoc = f"{o['gsoc']:.1f}" if o['gsoc'] else "N/A"
+        fit = f"{o['fit']:.1f}" if o['fit'] else "N/A"
+        print(f"{i:<4} | {o['org'][:15]:<15} | {o['repo'][:20]:<20} | {str(o['issue'])[:6]:<6} | {cval:<4} | {gsoc:<4} | {fit:<4} | {o['recommendation'][:30]}")
+
+def cmd_changes():
+    from src.opportunity_manager import get_changes_summary
+    from src.database import init_db
+    init_db()
+    summary = get_changes_summary()
+    print("Daily Delta:")
+    print(f"  New Opportunities: {summary['new_opportunities']}")
+    print(f"  Score Increased (>1.0): {summary['score_increased']}")
+    print(f"  Score Decreased (<-1.0): {summary['score_decreased']}")
+
+def cmd_history(issue_id):
+    from src.opportunity_manager import get_history
+    import json
+    hist = get_history(issue_id)
+    if not hist:
+        print("Issue not found in history.")
+        return
+    for k, v in hist.items():
+        print(f"{k}: {v}")
+
+def cmd_dismiss(issue_id, reason):
+    from src.opportunity_manager import transition_status
+    transition_status(issue_id, "DISMISSED", reason=reason)
+    print(f"Opportunity {issue_id} dismissed.")
+
+def cmd_watch(issue_id):
+    from src.opportunity_manager import transition_status
+    transition_status(issue_id, "WATCHING")
+    print(f"Now watching opportunity {issue_id}.")
+
+def cmd_digest():
+    from src.digest_generator import generate_daily_digest
+    generate_daily_digest()
+
+def cmd_daily_run():
+    from src.opportunity_manager import run_daily_pipeline
+    from src.digest_generator import generate_daily_digest
+    run_daily_pipeline()
+    generate_daily_digest()
+
+def cmd_research_top():
+    from src.opportunity_manager import select_top_for_research, transition_status
+    from src.hermes_agent import research
+    issue_id = select_top_for_research()
+    if not issue_id:
+        print("No valid opportunity found for top research.")
+        return
+    print(f"Selected top opportunity issue #{issue_id} for research.")
+    research(issue_id)
+    transition_status(issue_id, "RESEARCHED")
+    print(f"Marked {issue_id} as RESEARCHED.")
+
 def main():
     import argparse
     parser = argparse.ArgumentParser(description="OSS Discovery Radar")
@@ -252,6 +375,25 @@ def main():
     analyze_parser = subparsers.add_parser("analyze", help="Prints a detailed contribution brief for an issue.")
     analyze_parser.add_argument("id", help="Issue number or URL")
     
+    research_parser = subparsers.add_parser("research", help="Run local Hermes research on an issue.")
+    research_parser.add_argument("id", help="Issue number or URL")
+
+    plan_parser = subparsers.add_parser("plan", help="Generate local Hermes implementation plan for an issue.")
+    plan_parser.add_argument("id", help="Issue number or URL")
+
+    implement_parser = subparsers.add_parser("implement", help="Run local Hermes implementation in an isolated worktree.")
+    implement_parser.add_argument("id", help="Issue number or URL")
+    implement_parser.add_argument("--yes", action="store_true", help="Bypass approval prompt")
+
+    review_parser = subparsers.add_parser("review", help="Review local Hermes implementation results.")
+    review_parser.add_argument("id", help="Issue number or URL")
+    
+    workspace_parser = subparsers.add_parser("workspace", help="Show current local worktree and implementation status.")
+    workspace_parser.add_argument("id", help="Issue number or URL")
+    
+    cleanup_parser = subparsers.add_parser("cleanup", help="Safely remove the local worktree for an issue.")
+    cleanup_parser.add_argument("id", help="Issue number or URL")
+    
     opps_parser = subparsers.add_parser("opportunities", help="Show top opportunities specifically for me.")
     opps_parser.add_argument("--verified", action="store_true", help="Only show opportunities with verified GitHub org data")
     opps_parser.add_argument("--confidence", choices=["high", "medium", "low"], help="Filter by confidence level")
@@ -262,12 +404,41 @@ def main():
     opp_parser = subparsers.add_parser("opportunity", help="Prints a detailed explanation of one opportunity.")
     opp_parser.add_argument("id", help="Opportunity ID")
     
+    subparsers.add_parser("daily", help="Print daily shortlist of opportunities")
+    subparsers.add_parser("changes", help="Print summary of changes since last run")
+    
+    history_parser = subparsers.add_parser("history", help="Show history of an opportunity")
+    history_parser.add_argument("id", help="Issue number or URL")
+    
+    dismiss_parser = subparsers.add_parser("dismiss", help="Dismiss an opportunity")
+    dismiss_parser.add_argument("id", help="Issue number or URL")
+    dismiss_parser.add_argument("reason", help="Reason for dismissal")
+    
+    watch_parser = subparsers.add_parser("watch", help="Watch an opportunity")
+    watch_parser.add_argument("id", help="Issue number or URL")
+    
+    subparsers.add_parser("digest", help="Generate daily digest markdown")
+    subparsers.add_parser("daily-run", help="Run the full daily data pipeline")
+    subparsers.add_parser("research-top", help="Research the single highest value NEW opportunity locally")
+    
     args = parser.parse_args()
     
     if args.command == "issues":
         cmd_issues(active_only=args.active, org_filter=args.org, limit=args.limit, gsoc=args.gsoc, meaningful=args.meaningful)
     elif args.command == "analyze":
         cmd_analyze(args.id)
+    elif args.command == "research":
+        cmd_research(args.id)
+    elif args.command == "plan":
+        cmd_plan(args.id)
+    elif args.command == "implement":
+        cmd_implement(args.id, auto_yes=args.yes)
+    elif args.command == "review":
+        cmd_review(args.id)
+    elif args.command == "workspace":
+        cmd_workspace(args.id)
+    elif args.command == "cleanup":
+        cmd_cleanup(args.id)
     elif args.command == "sync_issues":
         cmd_sync_issues(limit=args.limit)
     elif args.command == "gsoc":
@@ -288,6 +459,22 @@ def main():
         cmd_opportunities(verified_only=args.verified, confidence_filter=args.confidence)
     elif args.command == "opportunity":
         cmd_opportunity(args.id)
+    elif args.command == "daily":
+        cmd_daily()
+    elif args.command == "changes":
+        cmd_changes()
+    elif args.command == "history":
+        cmd_history(args.id)
+    elif args.command == "dismiss":
+        cmd_dismiss(args.id, args.reason)
+    elif args.command == "watch":
+        cmd_watch(args.id)
+    elif args.command == "digest":
+        cmd_digest()
+    elif args.command == "daily-run":
+        cmd_daily_run()
+    elif args.command == "research-top":
+        cmd_research_top()
 
 if __name__ == "__main__":
     main()

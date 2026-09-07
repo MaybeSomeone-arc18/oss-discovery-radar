@@ -1,0 +1,17 @@
+agent_mode:
+  - research_only
+  - planning
+  - implementation
+
+default_mode: research_only
+
+human_approval_required: true
+
+allow_external_write: false
+allow_external_pr: false
+allow_external_issue: false
+allow_merge: false
+
+max_changed_files: 5
+max_diff_lines: 300
+test_timeout_seconds: 60

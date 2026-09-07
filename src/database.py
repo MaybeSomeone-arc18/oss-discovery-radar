@@ -173,6 +173,50 @@ def init_db():
         if 'contribution_value_score' not in issue_columns:
             cursor.execute("ALTER TABLE issues ADD COLUMN contribution_value_score REAL")
             
+        # Milestone 9: Opportunity Memory
+        if 'first_seen_at' not in issue_columns:
+            cursor.execute("ALTER TABLE issues ADD COLUMN first_seen_at TIMESTAMP")
+        if 'last_seen_at' not in issue_columns:
+            cursor.execute("ALTER TABLE issues ADD COLUMN last_seen_at TIMESTAMP")
+        if 'lifecycle_status' not in issue_columns:
+            cursor.execute("ALTER TABLE issues ADD COLUMN lifecycle_status TEXT DEFAULT 'NEW'")
+        if 'previous_score' not in issue_columns:
+            cursor.execute("ALTER TABLE issues ADD COLUMN previous_score REAL")
+        if 'current_score' not in issue_columns:
+            cursor.execute("ALTER TABLE issues ADD COLUMN current_score REAL")
+        if 'score_delta' not in issue_columns:
+            cursor.execute("ALTER TABLE issues ADD COLUMN score_delta REAL")
+        if 'first_recommended_at' not in issue_columns:
+            cursor.execute("ALTER TABLE issues ADD COLUMN first_recommended_at TIMESTAMP")
+        if 'last_recommended_at' not in issue_columns:
+            cursor.execute("ALTER TABLE issues ADD COLUMN last_recommended_at TIMESTAMP")
+        if 'viewed' not in issue_columns:
+            cursor.execute("ALTER TABLE issues ADD COLUMN viewed BOOLEAN DEFAULT 0")
+        if 'researched' not in issue_columns:
+            cursor.execute("ALTER TABLE issues ADD COLUMN researched BOOLEAN DEFAULT 0")
+        if 'planned' not in issue_columns:
+            cursor.execute("ALTER TABLE issues ADD COLUMN planned BOOLEAN DEFAULT 0")
+        if 'implemented' not in issue_columns:
+            cursor.execute("ALTER TABLE issues ADD COLUMN implemented BOOLEAN DEFAULT 0")
+        if 'submitted' not in issue_columns:
+            cursor.execute("ALTER TABLE issues ADD COLUMN submitted BOOLEAN DEFAULT 0")
+        if 'merged' not in issue_columns:
+            cursor.execute("ALTER TABLE issues ADD COLUMN merged BOOLEAN DEFAULT 0")
+        if 'dismissed' not in issue_columns:
+            cursor.execute("ALTER TABLE issues ADD COLUMN dismissed BOOLEAN DEFAULT 0")
+        if 'dismissal_reason' not in issue_columns:
+            cursor.execute("ALTER TABLE issues ADD COLUMN dismissal_reason TEXT")
+        
+        # Anti-spam & Personal Learning
+        if 'cooldown_until' not in issue_columns:
+            cursor.execute("ALTER TABLE issues ADD COLUMN cooldown_until TIMESTAMP")
+        if 'user_difficulty' not in issue_columns:
+            cursor.execute("ALTER TABLE issues ADD COLUMN user_difficulty TEXT")
+        if 'user_notes' not in issue_columns:
+            cursor.execute("ALTER TABLE issues ADD COLUMN user_notes TEXT")
+        if 'skills_learned' not in issue_columns:
+            cursor.execute("ALTER TABLE issues ADD COLUMN skills_learned TEXT")
+            
         # Repository Analysis
         cursor.execute('''
         CREATE TABLE IF NOT EXISTS repository_analysis (
@@ -291,8 +335,8 @@ def save_issue(url, repo_name, org_slug, issue_number, title, created_at, update
     with get_connection() as conn:
         cursor = conn.cursor()
         cursor.execute('''
-        INSERT INTO issues (url, repo_name, org_slug, issue_number, title, created_at, updated_at, state, labels, body_preview, comments_count, author, assignee_status, milestone, classified_tags)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        INSERT INTO issues (url, repo_name, org_slug, issue_number, title, created_at, updated_at, state, labels, body_preview, comments_count, author, assignee_status, milestone, classified_tags, first_seen_at, last_seen_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
         ON CONFLICT(url) DO UPDATE SET
             title=excluded.title,
             updated_at=excluded.updated_at,
@@ -302,7 +346,8 @@ def save_issue(url, repo_name, org_slug, issue_number, title, created_at, update
             comments_count=excluded.comments_count,
             assignee_status=excluded.assignee_status,
             milestone=excluded.milestone,
-            classified_tags=excluded.classified_tags
+            classified_tags=excluded.classified_tags,
+            last_seen_at=CURRENT_TIMESTAMP
         ''', (url, repo_name, org_slug, issue_number, title, created_at, updated_at, state, labels, body_preview, comments_count, author, assignee_status, milestone, tags_str))
         conn.commit()
 
@@ -325,8 +370,21 @@ def update_issue_opportunity(url, score, activity_status):
     with get_connection() as conn:
         cursor = conn.cursor()
         cursor.execute('''
-        UPDATE issues SET opportunity_score = ?, activity_status = ? WHERE url = ?
-        ''', (score, activity_status, url))
+        UPDATE issues SET 
+            previous_score = COALESCE(current_score, opportunity_score),
+            current_score = ?,
+            score_delta = ? - COALESCE(current_score, opportunity_score),
+            opportunity_score = ?,
+            activity_status = ?
+        WHERE url = ?
+        ''', (score, score, score, activity_status, url))
+        
+        # Reset cooldown if score delta is significant
+        cursor.execute('''
+        UPDATE issues SET cooldown_until = NULL
+        WHERE url = ? AND (score_delta > 1.0 OR score_delta < -1.0)
+        ''', (url,))
+        
         conn.commit()
 
 def update_issue_deep_analysis(url, issue_quality, contribution_type, engineering_depth, gsoc_score, contribution_score):

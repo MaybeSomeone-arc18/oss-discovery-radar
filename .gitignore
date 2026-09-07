@@ -7,3 +7,4 @@ digests/*
 !digests/.gitkeep
 data/
 .pytest_cache/
+workspaces/
