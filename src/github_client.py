@@ -88,3 +88,26 @@ def fetch_issues():
             issues.append(issue)
 
     return issues
+
+def check_related_prs(repo_name, issue_number):
+    if not GITHUB_TOKEN:
+        return []
+    
+    headers = {
+        "Authorization": f"Bearer {GITHUB_TOKEN}",
+        "Accept": "application/vnd.github.v3+json"
+    }
+    
+    q = f"repo:{repo_name} type:pr {issue_number}"
+    url = f"https://api.github.com/search/issues?q={q}"
+    
+    try:
+        response = requests.get(url, headers=headers, timeout=10)
+        if response.status_code == 200:
+            return response.json().get('items', [])
+        else:
+            print(f"Warning: GitHub API request failed for PR search {repo_name}#{issue_number} with status {response.status_code}")
+    except Exception as e:
+        print(f"Error checking related PRs for {repo_name}#{issue_number}: {e}")
+        
+    return []

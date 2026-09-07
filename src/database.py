@@ -207,6 +207,10 @@ def init_db():
         if 'dismissal_reason' not in issue_columns:
             cursor.execute("ALTER TABLE issues ADD COLUMN dismissal_reason TEXT")
         
+        # Milestone 10 Correction: Eligibility Gate
+        if 'eligibility_status' not in issue_columns:
+            cursor.execute("ALTER TABLE issues ADD COLUMN eligibility_status TEXT DEFAULT 'UNKNOWN'")
+        
         # Anti-spam & Personal Learning
         if 'cooldown_until' not in issue_columns:
             cursor.execute("ALTER TABLE issues ADD COLUMN cooldown_until TIMESTAMP")
@@ -399,6 +403,14 @@ def update_issue_deep_analysis(url, issue_quality, contribution_type, engineerin
             contribution_value_score = ?
         WHERE url = ?
         ''', (issue_quality, contribution_type, engineering_depth, gsoc_score, contribution_score, url))
+        conn.commit()
+
+def update_eligibility_status(url, eligibility_status):
+    with get_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute('''
+        UPDATE issues SET eligibility_status = ? WHERE url = ?
+        ''', (eligibility_status, url))
         conn.commit()
 
 def save_repository_analysis(repo_name, has_readme, has_contributing, has_code_of_conduct, description, test_frameworks, build_systems, pr_patterns):

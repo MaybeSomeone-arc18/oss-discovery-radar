@@ -1,14 +1,17 @@
 import json
 from datetime import datetime, timezone
-from src.database import get_connection, update_issue_opportunity
+from src.database import get_connection, update_issue_opportunity, update_eligibility_status
 from src.personal_fit import load_profile
+from src.github_client import check_related_prs
 
 def calculate_personal_fit(tags, title, body, profile):
     skills = [s.lower() for s in profile.get('skills', [])]
     interests = [i.lower() for i in profile.get('interests', [])]
     
     score = 0
-    text = (title + " " + body).lower()
+    safe_title = title or ""
+    safe_body = body or ""
+    text = (safe_title + " " + safe_body).lower()
     
     # Simple overlap with tags
     if tags:
@@ -40,7 +43,7 @@ def score_and_classify_issues():
         # Fetch issues with repository and organization metrics
         cursor.execute('''
         SELECT 
-            i.url, i.title, i.body_preview, i.labels, i.created_at, i.updated_at, i.comments_count, i.assignee_status, i.classified_tags,
+            i.url, i.title, i.body_preview, i.labels, i.created_at, i.updated_at, i.comments_count, i.assignee_status, i.classified_tags, i.issue_number, i.repo_name, i.eligibility_status,
             m.review_merge_activity_score, m.prs_merged_recently, m.prs_external,
             o.opportunity_score
         FROM issues i
@@ -54,7 +57,7 @@ def score_and_classify_issues():
         print(f"Scoring {len(issues)} open issues...")
         
         for row in issues:
-            url, title, body, labels_str, created_at, updated_at, comments, assignee, tags_str, rev_score, prs_merged, prs_ext, org_score = row
+            url, title, body, labels_str, created_at, updated_at, comments, assignee, tags_str, issue_number, repo_name, current_eligibility, rev_score, prs_merged, prs_ext, org_score = row
             
             labels = json.loads(labels_str) if labels_str else []
             tags = json.loads(tags_str) if tags_str else []
@@ -74,6 +77,21 @@ def score_and_classify_issues():
             else:
                 status = "UNKNOWN"
                 
+            # --- Eligibility Gate (Related PRs) ---
+            eligibility_status = current_eligibility or "UNKNOWN"
+            if eligibility_status == "UNKNOWN":
+                related_prs = check_related_prs(repo_name, issue_number)
+                if related_prs:
+                    has_merged = any(pr.get('state') == 'closed' for pr in related_prs)
+                    if has_merged:
+                        eligibility_status = "LIKELY_SOLVED"
+                    else:
+                        eligibility_status = "ACTIVE_WITH_WORK"
+                else:
+                    eligibility_status = "ACTIVE_UNADDRESSED"
+                
+                update_eligibility_status(url, eligibility_status)
+                
             # --- Score Calculation ---
             # 20% Personal technical fit
             fit_score = calculate_personal_fit(tags, title, body, profile)
@@ -88,10 +106,13 @@ def score_and_classify_issues():
             recency_score = max(0, 100 - (days_since_update * 2))
             
             # 10% Maintainer activity (from review score and comments)
-            maint_score = (min(100.0, rev_score) + min(100.0, comments * 10)) / 2
+            safe_rev_score = rev_score or 0.0
+            safe_comments = comments or 0
+            maint_score = (min(100.0, safe_rev_score) + min(100.0, safe_comments * 10)) / 2
             
             # 10% External contributors
-            ext_score = min(100.0, prs_ext * 20)
+            safe_prs_ext = prs_ext or 0
+            ext_score = min(100.0, safe_prs_ext * 20)
             
             # 10% Contribution accessibility
             labels_lower = [l.lower() for l in labels]
@@ -104,8 +125,14 @@ def score_and_classify_issues():
             if assignee == "ASSIGNED":
                 access_score = access_score * 0.1 # Heavily penalize if already assigned
                 
+            if eligibility_status in ("LIKELY_SOLVED", "SOLVED", "BLOCKED_RELATED_PR"):
+                access_score = 0.0
+            elif eligibility_status == "ACTIVE_WITH_WORK":
+                access_score = access_score * 0.1
+                
             # 5% Clarity
-            clarity_score = min(100.0, len(body) / 5) # Assume longer body = more context up to 500 chars
+            safe_body = body or ""
+            clarity_score = min(100.0, len(safe_body) / 5) # Assume longer body = more context up to 500 chars
             
             # 5% Difficulty
             # We want medium difficulty. Too easy/short = 50, well documented = 100.
@@ -124,6 +151,11 @@ def score_and_classify_issues():
                 (clarity_score * 0.05) +
                 (difficulty_score * 0.05)
             )
+            
+            if eligibility_status in ("LIKELY_SOLVED", "SOLVED", "BLOCKED_RELATED_PR"):
+                final_score = 0.0
+            elif eligibility_status == "ACTIVE_WITH_WORK":
+                final_score = final_score * 0.1
             
             update_issue_opportunity(url, round(final_score, 2), status)
             

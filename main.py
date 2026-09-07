@@ -20,6 +20,7 @@ def cmd_issues(active_only=False, org_filter=None, limit=20, gsoc=False, meaning
                gsoc_preparation_score, contribution_value_score, engineering_depth, org_slug
         FROM issues
         WHERE state = 'OPEN' AND opportunity_score IS NOT NULL
+        AND eligibility_status NOT IN ('LIKELY_SOLVED', 'SOLVED', 'BLOCKED_RELATED_PR', 'ACTIVE_WITH_WORK')
         '''
         params = []
         if active_only:
@@ -97,6 +98,38 @@ def cmd_analyze(issue_id_or_url):
     profile = load_profile()
     brief = generate_contribution_brief(issue_dict, repo_dict, profile)
     print(brief)
+
+def cmd_issue(issue_id):
+    from src.database import get_connection
+    from src.github_client import check_related_prs
+    
+    with get_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute('''
+        SELECT url, repo_name, issue_number, title, eligibility_status 
+        FROM issues WHERE issue_number = ? OR url = ?
+        ''', (issue_id, issue_id))
+        row = cursor.fetchone()
+        
+    if not row:
+        print(f"Issue {issue_id} not found in database.")
+        return
+        
+    url, repo_name, issue_number, title, eligibility = row
+    print(f"=== Issue #{issue_number} ===")
+    print(f"Repository: {repo_name}")
+    print(f"Title: {title}")
+    print(f"URL: {url}")
+    print(f"Current Eligibility Status: {eligibility}")
+    
+    print("\nFetching related PRs from GitHub...")
+    prs = check_related_prs(repo_name, issue_number)
+    if not prs:
+        print("No related PRs found.")
+    else:
+        print("Related PRs:")
+        for pr in prs:
+            print(f" - PR #{pr.get('number')}: {pr.get('title')} (State: {pr.get('state')})")
 
 def cmd_research(issue_id):
     from src.database import init_db
@@ -404,6 +437,9 @@ def main():
     opp_parser = subparsers.add_parser("opportunity", help="Prints a detailed explanation of one opportunity.")
     opp_parser.add_argument("id", help="Opportunity ID")
     
+    issue_parser = subparsers.add_parser("issue", help="View issue details and related PRs")
+    issue_parser.add_argument("id", help="Issue number or URL")
+    
     subparsers.add_parser("daily", help="Print daily shortlist of opportunities")
     subparsers.add_parser("changes", help="Print summary of changes since last run")
     
@@ -459,6 +495,8 @@ def main():
         cmd_opportunities(verified_only=args.verified, confidence_filter=args.confidence)
     elif args.command == "opportunity":
         cmd_opportunity(args.id)
+    elif args.command == "issue":
+        cmd_issue(args.id)
     elif args.command == "daily":
         cmd_daily()
     elif args.command == "changes":
