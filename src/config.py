@@ -24,6 +24,7 @@ GITHUB_TOKEN = get_github_token()
 
 # Milestone 2 Configs
 DB_PATH = os.getenv("DB_PATH", "data/radar.db")
+PROFILE_PATH = os.getenv("PROFILE_PATH", "config/profile.yaml")
 GSOC_YEARS_ENV = os.getenv("GSOC_YEARS", "2022,2023,2024,2025,2026")
 GSOC_YEARS = [int(y.strip()) for y in GSOC_YEARS_ENV.split(",") if y.strip().isdigit()]
 LOOKBACK_DAYS = int(os.getenv("LOOKBACK_DAYS", 30))

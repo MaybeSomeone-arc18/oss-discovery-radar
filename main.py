@@ -92,6 +92,45 @@ def cmd_org(slug):
             for r in repos:
                 print(f"  - {r[0]} (Stars: {r[1]}, Forks: {r[2]}, Issues: {r[3]}, PRs: {r[4]})")
 
+def cmd_profile():
+    from src.personal_fit import load_profile
+    profile = load_profile()
+    if not profile:
+        print("No profile found. Create config/profile.yaml")
+        return
+    print(json.dumps(profile, indent=2))
+
+def cmd_opportunities():
+    from src.personal_fit import get_ranked_opportunities
+    opps = get_ranked_opportunities()
+    if not opps:
+        print("No opportunities matched.")
+        return
+    
+    print(f"{'Rank':<5} | {'Type':<12} | {'Organization':<20} | {'Score':<6} | {'Title'}")
+    print("-" * 90)
+    for i, o in enumerate(opps[:20], 1):
+        print(f"{i:<5} | {o['type']:<12} | {o['organization'][:20]:<20} | {o['final_score']:<6.2f} | {o['title'][:40]}")
+
+def cmd_opportunity(opp_id):
+    from src.personal_fit import get_ranked_opportunities
+    opps = get_ranked_opportunities()
+    
+    for o in opps:
+        if o['id'] == opp_id:
+            print(f"=== Opportunity: {o['title']} ===")
+            print(f"ID: {o['id']} | Type: {o['type']} | Org: {o['organization']}")
+            print(f"Final Score: {o['final_score']} (Personal Fit: {o['personal_fit']}, Org Score: {o['org_score']})")
+            print(f"Why it fits: {o['why_it_fits']}")
+            print(f"Matched Skills: {', '.join(o['matched_skills']) if o['matched_skills'] else 'None'}")
+            print(f"Matched Interests: {', '.join(o['matched_interests']) if o['matched_interests'] else 'None'}")
+            print(f"Missing Profile Skills (Sample): {', '.join(o['missing_skills']) if o['missing_skills'] else 'None'}")
+            print(f"Learning Value: {', '.join(o['learning_value']) if o['learning_value'] else 'None'}")
+            print("\nRecommended next action: Review the project code URL or repository issues to see if you can tackle a good first issue.")
+            return
+            
+    print(f"Opportunity {opp_id} not found.")
+
 def main():
     parser = argparse.ArgumentParser(description="OSS Discovery Radar")
     subparsers = parser.add_subparsers(dest="command", required=True)
@@ -101,9 +140,14 @@ def main():
     subparsers.add_parser("status", help="Prints useful database statistics.")
     subparsers.add_parser("intel", help="Runs the Organization Intelligence Engine (GitHub collection + Scoring).")
     subparsers.add_parser("orgs", help="Prints a ranked table of organizations by opportunity score.")
+    subparsers.add_parser("profile", help="Show current personal profile.")
+    subparsers.add_parser("opportunities", help="Show top opportunities specifically for me.")
     
     org_parser = subparsers.add_parser("org", help="Prints a detailed report for one organization.")
     org_parser.add_argument("slug", help="Organization slug/name")
+    
+    opp_parser = subparsers.add_parser("opportunity", help="Prints a detailed explanation of one opportunity.")
+    opp_parser.add_argument("id", help="Opportunity ID")
     
     args = parser.parse_args()
     
@@ -119,6 +163,12 @@ def main():
         cmd_orgs()
     elif args.command == "org":
         cmd_org(args.slug)
+    elif args.command == "profile":
+        cmd_profile()
+    elif args.command == "opportunities":
+        cmd_opportunities()
+    elif args.command == "opportunity":
+        cmd_opportunity(args.id)
 
 if __name__ == "__main__":
     main()

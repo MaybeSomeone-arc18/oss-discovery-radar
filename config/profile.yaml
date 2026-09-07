@@ -1,0 +1,43 @@
+skills:
+  - Python
+  - C++
+  - Java
+  - JavaScript
+  - Android
+  - Computer Vision
+  - Machine Learning
+  - AI
+  - Systems
+  - Robotics
+  - Git
+  - Linux
+  - Rust
+
+interests:
+  - computer vision
+  - edge AI
+  - on-device AI
+  - robotics
+  - agentic AI
+  - developer tooling
+  - performance
+  - systems
+  - open source infrastructure
+
+preferred_languages:
+  - Python
+  - C++
+  - Rust
+  - Java
+
+learning_targets:
+  - Rust
+  - distributed systems
+  - performance engineering
+  - GPU/computer vision systems
+  - large-scale developer infrastructure
+
+priorities:
+  jenkins-infra: "B"
+  scipy: "A"
+  cloudnative: "A+"
