@@ -39,10 +39,18 @@ def test_save_issue():
     database.save_issue(
         url="https://github.com/test/repo/issues/1",
         repo_name="test-repo",
+        org_slug="test-org",
+        issue_number=1,
         title="Test Issue",
         created_at="2026-01-01T00:00:00Z",
-        labels=["bug", "good first issue"],
-        body_preview="This is a test issue."
+        updated_at="2026-01-01T00:00:00Z",
+        state="OPEN",
+        labels="[]",
+        body_preview="This is a test issue.",
+        comments_count=0,
+        author="test",
+        assignee_status="UNASSIGNED",
+        milestone=None
     )
     
     stats = database.get_stats()
@@ -53,10 +61,18 @@ def test_save_issue():
     database.save_issue(
         url="https://github.com/test/repo/issues/1",
         repo_name="test-repo",
+        org_slug="test-org",
+        issue_number=1,
         title="Test Issue Updated",
         created_at="2026-01-01T00:00:00Z",
-        labels=["bug"],
-        body_preview="Updated preview"
+        updated_at="2026-01-01T00:00:00Z",
+        state="OPEN",
+        labels="[]",
+        body_preview="This is a test issue updated.",
+        comments_count=0,
+        author="test",
+        assignee_status="UNASSIGNED",
+        milestone=None
     )
     
     stats = database.get_stats()

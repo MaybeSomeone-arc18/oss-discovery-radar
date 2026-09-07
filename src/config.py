@@ -25,10 +25,12 @@ GITHUB_TOKEN = get_github_token()
 # Milestone 2 Configs
 DB_PATH = os.getenv("DB_PATH", "data/radar.db")
 PROFILE_PATH = os.getenv("PROFILE_PATH", "config/profile.yaml")
+ORG_ALIASES_PATH = os.getenv("ORG_ALIASES_PATH", "config/org_aliases.yaml")
 GSOC_YEARS_ENV = os.getenv("GSOC_YEARS", "2022,2023,2024,2025,2026")
 GSOC_YEARS = [int(y.strip()) for y in GSOC_YEARS_ENV.split(",") if y.strip().isdigit()]
 LOOKBACK_DAYS = int(os.getenv("LOOKBACK_DAYS", 30))
 MAX_REPOS_PER_ORG = int(os.getenv("MAX_REPOS_PER_ORG", 20))
+ENRICH_ORG_BATCH_SIZE = int(os.getenv("ENRICH_ORG_BATCH_SIZE", 25))
 
 TARGET_ORGANIZATIONS = [
     "jenkins-infra",

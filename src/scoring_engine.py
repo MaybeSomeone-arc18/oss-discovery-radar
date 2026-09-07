@@ -44,6 +44,19 @@ def calculate_organization_scores():
             # Overall Score Calculation
             total_score = (gsoc_score * 0.3) + (activity_score * 0.2) + (issue_pr_score * 0.3) + (responsiveness_score * 0.2)
             
+            # Confidence & Completeness
+            cursor.execute("SELECT is_verified_github FROM organizations WHERE slug = ?", (org_slug,))
+            row_verified = cursor.fetchone()
+            is_verified = bool(row_verified[0]) if row_verified else False
+            
+            if is_verified and active_repos > 0:
+                confidence = "HIGH"
+            elif is_verified and active_repos == 0:
+                confidence = "MEDIUM"
+            else:
+                confidence = "LOW"
+                total_score = total_score * 0.5 # Penalty for unverified orgs so they don't overtake verified ones based purely on history
+            
             breakdown = {
                 "gsoc_history_score": round(gsoc_score, 2),
                 "activity_score": round(activity_score, 2),
@@ -51,6 +64,6 @@ def calculate_organization_scores():
                 "responsiveness_score": round(responsiveness_score, 2)
             }
             
-            update_organization_score(org_slug, round(total_score, 2), breakdown, github_account=org_slug)
+            update_organization_score(org_slug, round(total_score, 2), breakdown, github_account=org_slug, is_verified=is_verified, confidence=confidence)
             
     print("Scoring complete.")

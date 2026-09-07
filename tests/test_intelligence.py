@@ -33,7 +33,7 @@ def test_organization_scoring_no_activity():
         cursor.execute("SELECT opportunity_score, score_breakdown FROM organizations WHERE slug = 'ghost-org'")
         score, breakdown_str = cursor.fetchone()
         
-        assert score == 0.4
+        assert score == 0.2
         breakdown = json.loads(breakdown_str)
         assert breakdown['gsoc_history_score'] == 0.0
         assert breakdown['activity_score'] == 2.0
@@ -54,7 +54,7 @@ def test_organization_scoring_strong_activity():
         cursor.execute("SELECT opportunity_score, score_breakdown FROM organizations WHERE slug = 'strong-org'")
         score, breakdown_str = cursor.fetchone()
         
-        assert score > 50.0  # Should be highly rated
+        assert score > 30.0  # Should be highly rated but penalized if unverified
         breakdown = json.loads(breakdown_str)
         assert breakdown['gsoc_history_score'] == 40.0 # 2 years * 20
         assert breakdown['activity_score'] == 100.0 # Capped at 100

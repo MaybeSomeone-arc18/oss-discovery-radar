@@ -1,0 +1,11 @@
+mappings:
+  "jenkins": "jenkinsci"
+  "jenkins-wp": "jenkinsci"
+  "opencv": "opencv"
+  "scipy": "scipy"
+  "cloudnative": "cncf"
+  "owasp": "owasp"
+  "kubernetes": "kubernetes"
+  "jderobot": "JdeRobot"
+  "gnome": "GNOME"
+  "machine-learning-for-science": "ml4sci"

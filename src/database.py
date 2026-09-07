@@ -56,6 +56,8 @@ def init_db():
             cursor.execute("ALTER TABLE gsoc_projects ADD COLUMN short_description TEXT")
         if 'code_url' not in columns:
             cursor.execute("ALTER TABLE gsoc_projects ADD COLUMN code_url TEXT")
+        if 'classified_tags' not in columns:
+            cursor.execute("ALTER TABLE gsoc_projects ADD COLUMN classified_tags TEXT")
 
         cursor.execute("PRAGMA table_info(organizations)")
         org_columns = [col[1] for col in cursor.fetchall()]
@@ -65,6 +67,10 @@ def init_db():
             cursor.execute("ALTER TABLE organizations ADD COLUMN opportunity_score REAL")
         if 'score_breakdown' not in org_columns:
             cursor.execute("ALTER TABLE organizations ADD COLUMN score_breakdown TEXT")
+        if 'is_verified_github' not in org_columns:
+            cursor.execute("ALTER TABLE organizations ADD COLUMN is_verified_github BOOLEAN DEFAULT 0")
+        if 'opportunity_confidence' not in org_columns:
+            cursor.execute("ALTER TABLE organizations ADD COLUMN opportunity_confidence TEXT")
             
         # Repositories
         cursor.execute('''
@@ -100,6 +106,23 @@ def init_db():
         )
         ''')
         
+        # Pull Requests
+        cursor.execute('''
+        CREATE TABLE IF NOT EXISTS pull_requests (
+            pr_number INTEGER,
+            repo_name TEXT,
+            title TEXT,
+            state TEXT,
+            created_at TEXT,
+            updated_at TEXT,
+            merged_at TEXT,
+            author TEXT,
+            review_comments_count INTEGER,
+            url TEXT PRIMARY KEY,
+            FOREIGN KEY (repo_name) REFERENCES repositories(name)
+        )
+        ''')
+        
         # Issues
         cursor.execute('''
         CREATE TABLE IF NOT EXISTS issues (
@@ -113,6 +136,59 @@ def init_db():
             FOREIGN KEY (repo_name) REFERENCES repositories(name)
         )
         ''')
+        
+        # Migration: Add columns to issues if they do not exist
+        cursor.execute("PRAGMA table_info(issues)")
+        issue_columns = [col[1] for col in cursor.fetchall()]
+        if 'org_slug' not in issue_columns:
+            cursor.execute("ALTER TABLE issues ADD COLUMN org_slug TEXT")
+        if 'issue_number' not in issue_columns:
+            cursor.execute("ALTER TABLE issues ADD COLUMN issue_number INTEGER")
+        if 'state' not in issue_columns:
+            cursor.execute("ALTER TABLE issues ADD COLUMN state TEXT")
+        if 'updated_at' not in issue_columns:
+            cursor.execute("ALTER TABLE issues ADD COLUMN updated_at TEXT")
+        if 'comments_count' not in issue_columns:
+            cursor.execute("ALTER TABLE issues ADD COLUMN comments_count INTEGER DEFAULT 0")
+        if 'author' not in issue_columns:
+            cursor.execute("ALTER TABLE issues ADD COLUMN author TEXT")
+        if 'assignee_status' not in issue_columns:
+            cursor.execute("ALTER TABLE issues ADD COLUMN assignee_status TEXT")
+        if 'milestone' not in issue_columns:
+            cursor.execute("ALTER TABLE issues ADD COLUMN milestone TEXT")
+        if 'classified_tags' not in issue_columns:
+            cursor.execute("ALTER TABLE issues ADD COLUMN classified_tags TEXT")
+        if 'opportunity_score' not in issue_columns:
+            cursor.execute("ALTER TABLE issues ADD COLUMN opportunity_score REAL")
+        if 'activity_status' not in issue_columns:
+            cursor.execute("ALTER TABLE issues ADD COLUMN activity_status TEXT")
+        if 'issue_quality' not in issue_columns:
+            cursor.execute("ALTER TABLE issues ADD COLUMN issue_quality TEXT")
+        if 'contribution_type' not in issue_columns:
+            cursor.execute("ALTER TABLE issues ADD COLUMN contribution_type TEXT")
+        if 'engineering_depth' not in issue_columns:
+            cursor.execute("ALTER TABLE issues ADD COLUMN engineering_depth TEXT")
+        if 'gsoc_preparation_score' not in issue_columns:
+            cursor.execute("ALTER TABLE issues ADD COLUMN gsoc_preparation_score REAL")
+        if 'contribution_value_score' not in issue_columns:
+            cursor.execute("ALTER TABLE issues ADD COLUMN contribution_value_score REAL")
+            
+        # Repository Analysis
+        cursor.execute('''
+        CREATE TABLE IF NOT EXISTS repository_analysis (
+            repo_name TEXT PRIMARY KEY,
+            has_readme BOOLEAN,
+            has_contributing BOOLEAN,
+            has_code_of_conduct BOOLEAN,
+            description TEXT,
+            test_frameworks TEXT,
+            build_systems TEXT,
+            pr_patterns TEXT,
+            analyzed_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (repo_name) REFERENCES repositories(name)
+        )
+        ''')
+            
         conn.commit()
 
 def save_organization(slug, name, url=None, year=None):
@@ -176,48 +252,115 @@ def save_repository_metrics(repo_name, issues_created, issues_closed, prs_opened
         ''', (repo_name, issues_created, issues_closed, prs_opened, prs_merged, prs_external, recent_commits, maintainer_response_time, review_activity_score))
         conn.commit()
 
-def update_organization_score(slug, score, breakdown, github_account=None):
+def update_organization_score(slug, score, breakdown, github_account=None, is_verified=False, confidence=None):
     import json
     with get_connection() as conn:
         cursor = conn.cursor()
         if github_account:
             cursor.execute('''
-            UPDATE organizations SET opportunity_score = ?, score_breakdown = ?, github_account = ? WHERE slug = ?
-            ''', (score, json.dumps(breakdown), github_account, slug))
+            UPDATE organizations SET opportunity_score = ?, score_breakdown = ?, github_account = ?, is_verified_github = ?, opportunity_confidence = ? WHERE slug = ?
+            ''', (score, json.dumps(breakdown), github_account, is_verified, confidence, slug))
         else:
             cursor.execute('''
-            UPDATE organizations SET opportunity_score = ?, score_breakdown = ? WHERE slug = ?
-            ''', (score, json.dumps(breakdown), slug))
+            UPDATE organizations SET opportunity_score = ?, score_breakdown = ?, is_verified_github = ?, opportunity_confidence = ? WHERE slug = ?
+            ''', (score, json.dumps(breakdown), is_verified, confidence, slug))
         conn.commit()
 
-def save_gsoc_project(org_slug, year, title, description, short_description, contributor, url, code_url, technologies):
+def save_gsoc_project(org_slug, year, title, description, short_description, contributor, url, code_url, technologies, classified_tags=None):
+    import json
+    tags_str = json.dumps(classified_tags) if classified_tags else None
     with get_connection() as conn:
         cursor = conn.cursor()
         cursor.execute('''
-        INSERT INTO gsoc_projects (org_slug, year, title, description, short_description, contributor, url, code_url, technologies)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        INSERT INTO gsoc_projects (org_slug, year, title, description, short_description, contributor, url, code_url, technologies, classified_tags)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(org_slug, year, title) DO UPDATE SET
             description=excluded.description,
             short_description=excluded.short_description,
             contributor=excluded.contributor,
             url=excluded.url,
             code_url=excluded.code_url,
-            technologies=excluded.technologies
-        ''', (org_slug, year, title, description, short_description, contributor, url, code_url, technologies))
+            technologies=excluded.technologies,
+            classified_tags=excluded.classified_tags
+        ''', (org_slug, year, title, description, short_description, contributor, url, code_url, technologies, tags_str))
         conn.commit()
 
-def save_issue(url, repo_name, title, created_at, labels, body_preview):
+def save_issue(url, repo_name, org_slug, issue_number, title, created_at, updated_at, state, labels, body_preview, comments_count, author, assignee_status, milestone, classified_tags=None):
+    import json
+    tags_str = json.dumps(classified_tags) if classified_tags else None
     with get_connection() as conn:
         cursor = conn.cursor()
-        labels_str = ",".join(labels) if isinstance(labels, list) else labels
         cursor.execute('''
-        INSERT INTO issues (url, repo_name, title, created_at, labels, body_preview)
-        VALUES (?, ?, ?, ?, ?, ?)
+        INSERT INTO issues (url, repo_name, org_slug, issue_number, title, created_at, updated_at, state, labels, body_preview, comments_count, author, assignee_status, milestone, classified_tags)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(url) DO UPDATE SET
             title=excluded.title,
+            updated_at=excluded.updated_at,
+            state=excluded.state,
             labels=excluded.labels,
-            body_preview=excluded.body_preview
-        ''', (url, repo_name, title, created_at, labels_str, body_preview))
+            body_preview=excluded.body_preview,
+            comments_count=excluded.comments_count,
+            assignee_status=excluded.assignee_status,
+            milestone=excluded.milestone,
+            classified_tags=excluded.classified_tags
+        ''', (url, repo_name, org_slug, issue_number, title, created_at, updated_at, state, labels, body_preview, comments_count, author, assignee_status, milestone, tags_str))
+        conn.commit()
+
+def save_pull_request(url, pr_number, repo_name, title, state, created_at, updated_at, merged_at, author, review_comments_count):
+    with get_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute('''
+        INSERT INTO pull_requests (url, pr_number, repo_name, title, state, created_at, updated_at, merged_at, author, review_comments_count)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(url) DO UPDATE SET
+            title=excluded.title,
+            state=excluded.state,
+            updated_at=excluded.updated_at,
+            merged_at=excluded.merged_at,
+            review_comments_count=excluded.review_comments_count
+        ''', (url, pr_number, repo_name, title, state, created_at, updated_at, merged_at, author, review_comments_count))
+        conn.commit()
+
+def update_issue_opportunity(url, score, activity_status):
+    with get_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute('''
+        UPDATE issues SET opportunity_score = ?, activity_status = ? WHERE url = ?
+        ''', (score, activity_status, url))
+        conn.commit()
+
+def update_issue_deep_analysis(url, issue_quality, contribution_type, engineering_depth, gsoc_score, contribution_score):
+    with get_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute('''
+        UPDATE issues SET 
+            issue_quality = ?,
+            contribution_type = ?,
+            engineering_depth = ?,
+            gsoc_preparation_score = ?,
+            contribution_value_score = ?
+        WHERE url = ?
+        ''', (issue_quality, contribution_type, engineering_depth, gsoc_score, contribution_score, url))
+        conn.commit()
+
+def save_repository_analysis(repo_name, has_readme, has_contributing, has_code_of_conduct, description, test_frameworks, build_systems, pr_patterns):
+    import json
+    with get_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute('''
+        INSERT INTO repository_analysis (repo_name, has_readme, has_contributing, has_code_of_conduct, description, test_frameworks, build_systems, pr_patterns)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(repo_name) DO UPDATE SET
+            has_readme=excluded.has_readme,
+            has_contributing=excluded.has_contributing,
+            has_code_of_conduct=excluded.has_code_of_conduct,
+            description=excluded.description,
+            test_frameworks=excluded.test_frameworks,
+            build_systems=excluded.build_systems,
+            pr_patterns=excluded.pr_patterns,
+            analyzed_at=CURRENT_TIMESTAMP
+        ''', (repo_name, has_readme, has_contributing, has_code_of_conduct, description, 
+              json.dumps(test_frameworks), json.dumps(build_systems), json.dumps(pr_patterns)))
         conn.commit()
 
 def get_stats():

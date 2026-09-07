@@ -55,13 +55,13 @@ def score_opportunity(title, description, technologies):
         'why_it_fits': f"Matches {len(skill_matches)} skills and {len(interest_matches)} interests."
     }
 
-def get_ranked_opportunities():
+def get_ranked_opportunities(verified_only=False, confidence_filter=None):
     with get_connection() as conn:
         cursor = conn.cursor()
         
         # We fetch GSoC Projects
         cursor.execute('''
-        SELECT p.id, p.org_slug, p.title, p.description, p.technologies, o.opportunity_score, o.name
+        SELECT p.id, p.org_slug, p.title, p.description, p.technologies, o.opportunity_score, o.name, o.is_verified_github, o.opportunity_confidence, p.classified_tags
         FROM gsoc_projects p
         JOIN organizations o ON p.org_slug = o.slug
         ''')
@@ -72,14 +72,18 @@ def get_ranked_opportunities():
         
         results = []
         for p in projects:
-            p_id, org_slug, title, desc, techs, org_score, org_name = p
+            p_id, org_slug, title, desc, techs, org_score, org_name, is_verified, conf, tags = p
             org_score = org_score or 0.0
+            is_verified = bool(is_verified)
+            conf = conf or "LOW"
+            
+            if verified_only and not is_verified:
+                continue
+                
+            if confidence_filter and conf.upper() != confidence_filter.upper():
+                continue
             
             fit = score_opportunity(title, desc, techs)
-            
-            # Combine scores: 30% personal fit, 70% org score (which encompasses history, activity, responsiveness)
-            # The prompt suggested more granular weights, but since we already bundled org score:
-            # Let's say org_score is the remaining 70%.
             
             priority_bonus = 0
             priority = priorities.get(org_slug)
@@ -88,10 +92,18 @@ def get_ranked_opportunities():
             elif priority == 'B': priority_bonus = 5
             
             final_score = (fit['score'] * 0.3) + (org_score * 0.7) + priority_bonus
+            
+            # Penalize final score if not verified
+            if not is_verified:
+                final_score = final_score * 0.5
+                
             final_score = min(100.0, final_score)
             
-            # Only keep somewhat relevant ones
-            if final_score > 10:
+            completeness = "historical-only"
+            if is_verified:
+                completeness = "verified" if conf == "HIGH" else "partial"
+            
+            if final_score > 5:
                 results.append({
                     'id': f"proj-{p_id}",
                     'type': 'GSoC Project',
@@ -105,7 +117,10 @@ def get_ranked_opportunities():
                     'missing_skills': fit['missing_skills'],
                     'matched_skills': fit['matched_skills'],
                     'matched_interests': fit['matched_interests'],
-                    'learning_value': fit['learning_value']
+                    'learning_value': fit['learning_value'],
+                    'data_completeness': completeness,
+                    'confidence': conf,
+                    'tags': tags
                 })
         
         results.sort(key=lambda x: x['final_score'], reverse=True)
