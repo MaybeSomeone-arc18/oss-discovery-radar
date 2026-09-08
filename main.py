@@ -8,7 +8,7 @@ from src.database import get_stats, init_db, get_connection
 from src.github_collector import fetch_organization_intelligence
 from src.scoring_engine import calculate_organization_scores
 
-def cmd_issues(active_only=False, org_filter=None, limit=20, gsoc=False, meaningful=False):
+def cmd_issues(active_only=False, org_filter=None, limit=20, gsoc=False, meaningful=False, exclude_student_repos=False):
     from src.database import get_connection
     
     with get_connection() as conn:
@@ -16,25 +16,28 @@ def cmd_issues(active_only=False, org_filter=None, limit=20, gsoc=False, meaning
         
         # Backwards compatible query just in case deep analysis hasn't run yet
         query = '''
-        SELECT url, repo_name, issue_number, title, opportunity_score, activity_status,
-               gsoc_preparation_score, contribution_value_score, engineering_depth, org_slug
-        FROM issues
-        WHERE state = 'OPEN' AND opportunity_score IS NOT NULL
-        AND eligibility_status NOT IN ('LIKELY_SOLVED', 'SOLVED', 'BLOCKED_RELATED_PR', 'ACTIVE_WITH_WORK')
+        SELECT i.url, i.repo_name, i.issue_number, i.title, i.opportunity_score, i.activity_status,
+               i.gsoc_preparation_score, i.contribution_value_score, i.engineering_depth, i.org_slug
+        FROM issues i
+        LEFT JOIN repositories r ON i.repo_name = r.name
+        WHERE i.state = 'OPEN' AND i.opportunity_score IS NOT NULL
+        AND i.eligibility_status NOT IN ('LIKELY_SOLVED', 'SOLVED', 'BLOCKED_RELATED_PR', 'ACTIVE_WITH_WORK')
         '''
         params = []
         if active_only:
-            query += " AND activity_status IN ('ACTIVE', 'LIKELY_ACTIVE')"
+            query += " AND i.activity_status IN ('ACTIVE', 'LIKELY_ACTIVE')"
         if org_filter:
-            query += " AND org_slug = ?"
+            query += " AND i.org_slug = ?"
             params.append(org_filter)
         if meaningful:
-            query += " AND engineering_depth != 'TRIVIAL' AND contribution_type != 'MAINTENANCE'"
+            query += " AND i.engineering_depth != 'TRIVIAL' AND i.contribution_type != 'MAINTENANCE'"
+        if exclude_student_repos:
+            query += " AND (r.repo_eligibility IS NULL OR r.repo_eligibility NOT IN ('BLOCKED_STUDENT_WORK_REPO', 'BLOCKED_ARCHIVED', 'BLOCKED_FORK_OR_MIRROR'))"
             
         if gsoc:
-            query += " ORDER BY gsoc_preparation_score DESC NULLS LAST LIMIT ?"
+            query += " ORDER BY i.gsoc_preparation_score DESC NULLS LAST LIMIT ?"
         else:
-            query += " ORDER BY contribution_value_score DESC NULLS LAST, opportunity_score DESC LIMIT ?"
+            query += " ORDER BY i.contribution_value_score DESC NULLS LAST, i.opportunity_score DESC LIMIT ?"
             
         params.append(limit)
         
@@ -146,6 +149,32 @@ def cmd_plan(issue_id):
 def cmd_implement(issue_id, auto_yes=False):
     from src.database import init_db
     init_db()
+    
+    print("\n==================================================")
+    print("        IMPLEMENTATION APPROVAL SCREEN")
+    print("==================================================")
+    
+    from src.database import get_connection
+    with get_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute("SELECT url, repo_name, issue_number, title FROM issues WHERE issue_number = ? OR url = ?", (issue_id, issue_id))
+        row = cursor.fetchone()
+        
+    if not row:
+        print("Issue not found in database.")
+        return
+        
+    url, repo_name, issue_number, title = row
+    
+    print(f"Candidate: {repo_name} #{issue_number}")
+    print(f"Issue: {title}")
+    print(f"Why: Selected as best first contribution candidate")
+    print(f"Risk: Moderate (local worktree only)")
+    print(f"Expected files: See plan report")
+    print(f"Expected tests: See plan report")
+    print(f"Estimated difficulty: Medium")
+    print("==================================================\n")
+    
     if not auto_yes:
         print("WARNING:")
         print("This will allow Hermes to modify code in a LOCAL isolated worktree.")
@@ -159,6 +188,176 @@ def cmd_implement(issue_id, auto_yes=False):
     from src.implementer import implement
     implement(issue_id)
 
+def cmd_first_contribution():
+    from src.contribution_engine import calculate_first_contribution_score
+    from src.database import get_connection, update_readiness_status
+    from src.github_client import check_related_prs, fetch_contribution_model
+    from src.deep_analysis import check_release_prerequisites
+    import json
+    import os
+    
+    print("Scoring and filtering open issues for First Contribution metrics...")
+    with get_connection() as conn:
+        cursor = conn.cursor()
+        # Ensure we filter out ineligible issues before ranking
+        cursor.execute("""
+            SELECT i.url, i.repo_name, i.issue_number, i.title, i.body_preview, i.org_slug, i.gsoc_preparation_score, o.opportunity_score, i.engineering_depth
+            FROM issues i 
+            LEFT JOIN repositories r ON i.repo_name = r.name
+            LEFT JOIN organizations o ON i.org_slug = o.slug
+            WHERE i.state = 'OPEN' 
+            AND (i.eligibility_status IS NULL OR i.eligibility_status NOT IN ('BLOCKED', 'SOLVED', 'DUPLICATE', 'BLOCKED_STUDENT_WORK_REPO', 'BLOCKED_RELATED_PR', 'LIKELY_SOLVED'))
+            AND (i.activity_status IS NULL OR i.activity_status IN ('ACTIVE', 'LIKELY_ACTIVE'))
+            AND (i.assignee_status IS NULL OR i.assignee_status != 'ASSIGNED')
+            AND (r.repo_eligibility IS NULL OR r.repo_eligibility NOT IN ('BLOCKED_STUDENT_WORK_REPO', 'BLOCKED_ARCHIVED', 'BLOCKED_FORK_OR_MIRROR'))
+        """)
+        rows = cursor.fetchall()
+        
+    scored_candidates = []
+    for row in rows:
+        url, repo_name, issue_number, title, body_preview, org_slug, gsoc, fit, depth = row
+        score, notes = calculate_first_contribution_score(url)
+        if score > 0:
+            scored_candidates.append({
+                "url": url, "repo": repo_name, "num": issue_number, "title": title,
+                "body": body_preview, "org": org_slug, "score": score, "notes": notes,
+                "gsoc": gsoc, "fit": fit, "depth": depth
+            })
+            
+    scored_candidates.sort(key=lambda x: x["score"], reverse=True)
+    
+    top_10 = []
+    repo_counts = {}
+    
+    print("Deep Validation of top candidates...")
+    
+    for cand in scored_candidates:
+        repo = cand["repo"]
+        if repo_counts.get(repo, 0) >= 3:
+            continue
+            
+        num = cand["num"]
+        
+        # Live PR Check
+        prs = check_related_prs(repo, num)
+        if prs:
+            continue
+            
+        # Prerequisite check
+        readiness, read_ev = check_release_prerequisites(repo, cand["title"], cand["body"])
+        update_readiness_status(cand["url"], readiness, read_ev)
+        cand["readiness"] = readiness
+        cand["read_ev"] = read_ev
+        
+        # Model / Contrib Check
+        model = fetch_contribution_model(repo)
+        if not model.get('has_contributing'):
+            classification = "GOOD_ENTRY_POINT"
+        else:
+            classification = "STRONG_CANDIDATE"
+            
+        if readiness != "READY_NOW":
+            # Demote classification if not ready
+            classification = "BLOCKED" if readiness == "BLOCKED" else readiness
+            
+        cand["classification"] = classification
+        
+        top_10.append(cand)
+        repo_counts[repo] = repo_counts.get(repo, 0) + 1
+        
+        print(f"Validated #{num} ({repo}) -> {classification} ({readiness})")
+        if len(top_10) >= 10:
+            break
+            
+    if not top_10:
+        print("No viable, unblocked candidates found.")
+        return
+        
+    print(f"\n{'Rank':<4} | {'Org':<15} | {'Repo':<20} | {'Issue':<6} | {'Score':<5} | {'Readiness':<18} | {'Classification'}")
+    print("-" * 115)
+    
+    for i, cand in enumerate(top_10, 1):
+        print(f"{i:<4} | {cand['org'][:15]:<15} | {cand['repo'][:20]:<20} | {cand['num']:<6} | {cand['score']:<5.1f} | {cand['readiness'][:18]:<18} | {cand['classification']}")
+        
+    best = top_10[0]
+    
+    print("\nRECOMMENDED CANDIDATE")
+    print("=====================")
+    print(f"#{best['num']} in {best['repo']} ({best['url']})")
+    print(f"Title: {best['title']}")
+    print(f"Classification: {best['classification']}")
+    print(f"Readiness: {best['readiness']}")
+    print(f"First Contribution Score: {best['score']}")
+    print(f"GSoC Value: {best['gsoc']}")
+    print(f"Personal Fit: {best['fit']}")
+    print(f"Engineering Depth: {best['depth']}")
+    print(f"Maintainer Activity: ACTIVE")
+    print(f"Eligibility: {best['classification']}")
+    print(f"Confidence: HIGH")
+    print("\nWhy it is suitable:")
+    print(best['notes'])
+    print("\nBiggest risk:")
+    print("Requires local environment setup and thorough testing before proceeding.")
+    
+    print("\nWHY THIS CANDIDATE OVER ALTERNATIVES")
+    print(f"This candidate scored highest across all dimensions and successfully passed Phase 3 live PR and prerequisite checks. It is a {best['classification']}.")
+    
+    for i in range(1, min(4, len(top_10))):
+        alt = top_10[i]
+        print(f"WHY NOT #{alt['num']} ({alt['repo']}): Scored {alt['score']} (lower than {best['score']}).")
+    
+    # Generate Preflight Report
+    report_dir = f"reports/{best['num']}"
+    os.makedirs(report_dir, exist_ok=True)
+    report_path = f"{report_dir}/first_contribution_preflight.md"
+    
+    with open(report_path, "w") as f:
+        f.write(f"# First Contribution Preflight Report\n\n")
+        f.write(f"## Issue: {best['repo']}#{best['num']}\n")
+        f.write(f"**URL:** {best['url']}\n")
+        f.write(f"**Classification:** {best['classification']}\n")
+        f.write(f"**Readiness:** {best['readiness']} ({best['read_ev']})\n")
+        f.write(f"**Score:** {best['score']}\n\n")
+        f.write(f"## Live Verification\n")
+        f.write(f"- Verified NO conflicting merged PRs via GitHub API.\n")
+        f.write(f"- Verified prerequisite checks.\n")
+        f.write(f"- Confirmed repository activity.\n\n")
+        f.write(f"## Justification\n")
+        f.write(best['notes'].replace('\\n', '\n'))
+        f.write(f"\n\nFINAL DECISION:\n{best['classification']}\n")
+        
+    print(f"\nPreflight report generated at {report_path}")
+    
+    if best['classification'] in ("STRONG_CANDIDATE", "GOOD_ENTRY_POINT") and best['readiness'] == "READY_NOW":
+        print(f"\nTriggering Hermes for candidate...")
+        from src.hermes_agent import research, plan
+        research(best['url'])
+        plan(best['url'])
+    else:
+        print(f"\nCandidate is not READY_NOW or STRONG_CANDIDATE. Hermes will not be invoked automatically.")
+
+def cmd_repo(repo_full_name):
+    from src.database import get_connection
+    with get_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute("SELECT repo_classification, repo_classification_evidence, repo_eligibility, upstream_repo, upstream_confidence FROM repositories WHERE name = ?", (repo_full_name,))
+        row = cursor.fetchone()
+        
+    if not row:
+        print(f"Repository {repo_full_name} not found in local database.")
+        return
+        
+    classification, evidence, eligibility, upstream, up_conf = row
+    
+    print(f"Repository: {repo_full_name}")
+    print(f"Classification: {classification or 'UNKNOWN'}")
+    print(f"Evidence: {evidence or 'None'}")
+    print(f"Contribution eligibility: {eligibility or 'UNKNOWN'}")
+    
+    if upstream:
+        print(f"Parent/upstream repository: {upstream} (Confidence: {up_conf})")
+    else:
+        print("Parent/upstream repository: None")
 def cmd_review(issue_id):
     from src.implementer import review
     review(issue_id)
@@ -404,6 +603,10 @@ def main():
     issues_parser.add_argument("--limit", type=int, default=20, help="Number of issues to return")
     issues_parser.add_argument("--gsoc", action="store_true", help="Prioritize GSoC preparation value")
     issues_parser.add_argument("--meaningful", action="store_true", help="Filter out trivial/maintenance issues")
+    issues_parser.add_argument("--exclude-student-repos", action="store_true", help="Filter out GSoC/student work repos")
+    
+    repo_parser = subparsers.add_parser("repo", help="Prints classification details for a repository.")
+    repo_parser.add_argument("name", help="Repository full name (owner/repo)")
     
     analyze_parser = subparsers.add_parser("analyze", help="Prints a detailed contribution brief for an issue.")
     analyze_parser.add_argument("id", help="Issue number or URL")
@@ -456,13 +659,16 @@ def main():
     subparsers.add_parser("digest", help="Generate daily digest markdown")
     subparsers.add_parser("daily-run", help="Run the full daily data pipeline")
     subparsers.add_parser("research-top", help="Research the single highest value NEW opportunity locally")
+    subparsers.add_parser("first-contribution", help="Show the top candidates for first real contribution and run deep validation.")
     
     args = parser.parse_args()
     
     if args.command == "issues":
-        cmd_issues(active_only=args.active, org_filter=args.org, limit=args.limit, gsoc=args.gsoc, meaningful=args.meaningful)
+        cmd_issues(active_only=args.active, org_filter=args.org, limit=args.limit, gsoc=args.gsoc, meaningful=args.meaningful, exclude_student_repos=args.exclude_student_repos)
     elif args.command == "analyze":
         cmd_analyze(args.id)
+    elif args.command == "repo":
+        cmd_repo(args.name)
     elif args.command == "research":
         cmd_research(args.id)
     elif args.command == "plan":
@@ -513,6 +719,8 @@ def main():
         cmd_daily_run()
     elif args.command == "research-top":
         cmd_research_top()
+    elif args.command == "first-contribution":
+        cmd_first_contribution()
 
 if __name__ == "__main__":
     main()

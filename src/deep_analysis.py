@@ -1,4 +1,6 @@
 import re
+import requests
+from src.config import GITHUB_TOKEN
 from src.database import update_issue_deep_analysis, get_connection
 from src.repository_analyzer import analyze_repository
 
@@ -43,11 +45,48 @@ def estimate_engineering_depth(title, body, labels):
     if "architecture" in text or "race condition" in text or "design" in text or "concurrency" in text or "memory leak" in text:
         return "SUBSTANTIAL"
         
-    if "refactor" in text or "performance" in text:
+    # Medium heuristics
+    if "refactor" in text or "performance" in text or "cleanup" in text or "one pr per line" in text or "verification" in text:
         return "MEDIUM"
         
     return "SMALL"
 
+def check_release_prerequisites(repo_full_name, title, body):
+    """
+    Looks for phrases like 'after 2.25.0 is released'. 
+    If found, checks GitHub for that release/tag.
+    Returns (status, evidence) where status is READY_NOW or WAITING_ON_RELEASE.
+    """
+    text = (title + " " + (body or "")).lower()
+    
+    # Simple regex for "after X.Y.Z is released" or "wait for X.Y.Z"
+    match = re.search(r'(?:after|wait for|until)[^\d]{0,20}(\d+\.\d+\.\d+(?:-\w+)?)', text)
+    if not match:
+        return "READY_NOW", "No release prerequisites detected"
+        
+    required_version = match.group(1)
+    
+    # Check github tags/releases
+    headers = {"Authorization": f"token {GITHUB_TOKEN}"} if GITHUB_TOKEN else {}
+    url = f"https://api.github.com/repos/{repo_full_name}/releases"
+    resp = requests.get(url, headers=headers)
+    
+    if resp.status_code == 200:
+        releases = resp.json()
+        for r in releases:
+            if required_version in r.get('tag_name', '') or required_version in r.get('name', ''):
+                return "READY_NOW", f"Required version {required_version} is already released."
+                
+    # Also check tags just in case
+    url_tags = f"https://api.github.com/repos/{repo_full_name}/tags"
+    resp_tags = requests.get(url_tags, headers=headers)
+    if resp_tags.status_code == 200:
+        tags = resp_tags.json()
+        for t in tags:
+            if required_version in t.get('name', ''):
+                return "READY_NOW", f"Required version {required_version} found in tags."
+                
+    return "WAITING_ON_RELEASE", f"Waiting on unreleased version: {required_version}"
 def calculate_gsoc_score(depth, contrib_type):
     score = 50.0
     if depth == "TRIVIAL":

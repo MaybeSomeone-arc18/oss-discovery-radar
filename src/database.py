@@ -97,7 +97,10 @@ def init_db():
 
         cursor.execute("PRAGMA table_info(repositories)")
         repo_columns = [col[1] for col in cursor.fetchall()]
-        new_repo_cols = ['stars', 'forks', 'open_issues', 'open_prs', 'last_pushed_at', 'primary_language', 'archived', 'default_branch']
+        new_repo_cols = [
+            'stars', 'forks', 'open_issues', 'open_prs', 'last_pushed_at', 'primary_language', 'archived', 'default_branch',
+            'repo_classification', 'repo_eligibility', 'repo_classification_evidence', 'upstream_repo', 'upstream_confidence'
+        ]
         for col in new_repo_cols:
             if col not in repo_columns:
                 cursor.execute(f"ALTER TABLE repositories ADD COLUMN {col} TEXT")
@@ -229,6 +232,10 @@ def init_db():
             cursor.execute("ALTER TABLE issues ADD COLUMN first_contribution_score REAL")
         if 'first_contribution_notes' not in issue_columns:
             cursor.execute("ALTER TABLE issues ADD COLUMN first_contribution_notes TEXT")
+        if 'readiness_status' not in issue_columns:
+            cursor.execute("ALTER TABLE issues ADD COLUMN readiness_status TEXT DEFAULT 'UNKNOWN'")
+        if 'readiness_evidence' not in issue_columns:
+            cursor.execute("ALTER TABLE issues ADD COLUMN readiness_evidence TEXT")
         
         # Anti-spam & Personal Learning
         if 'cooldown_until' not in issue_columns:
@@ -440,6 +447,14 @@ def update_first_contribution_score(url, score, notes):
         ''', (score, notes, url))
         conn.commit()
 
+def update_readiness_status(url, status, evidence):
+    with get_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute('''
+        UPDATE issues SET readiness_status = ?, readiness_evidence = ? WHERE url = ?
+        ''', (status, evidence, url))
+        conn.commit()
+
 def save_repository_analysis(repo_name, has_readme, has_contributing, has_code_of_conduct, description, test_frameworks, build_systems, pr_patterns):
     import json
     with get_connection() as conn:
@@ -479,3 +494,17 @@ def get_stats():
         cursor.execute("SELECT COUNT(*) FROM issues")
         stats['issues'] = cursor.fetchone()[0]
     return stats
+
+def update_repository_classification(repo_name, classification, eligibility, evidence, upstream_repo=None, upstream_confidence=None):
+    with get_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute('''
+            UPDATE repositories
+            SET repo_classification = ?,
+                repo_eligibility = ?,
+                repo_classification_evidence = ?,
+                upstream_repo = ?,
+                upstream_confidence = ?
+            WHERE name = ?
+        ''', (classification, eligibility, evidence, upstream_repo, upstream_confidence, repo_name))
+        conn.commit()

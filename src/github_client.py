@@ -98,16 +98,65 @@ def check_related_prs(repo_name, issue_number):
         "Accept": "application/vnd.github.v3+json"
     }
     
+    # Check for PRs mentioning the issue number
     q = f"repo:{repo_name} type:pr {issue_number}"
     url = f"https://api.github.com/search/issues?q={q}"
     
+    prs = []
     try:
         response = requests.get(url, headers=headers, timeout=10)
         if response.status_code == 200:
-            return response.json().get('items', [])
+            prs.extend(response.json().get('items', []))
         else:
             print(f"Warning: GitHub API request failed for PR search {repo_name}#{issue_number} with status {response.status_code}")
     except Exception as e:
         print(f"Error checking related PRs for {repo_name}#{issue_number}: {e}")
         
-    return []
+    # Check for recent commits mentioning the issue number (Milestone 11 enhancement)
+    q_commit = f"repo:{repo_name} {issue_number}"
+    url_commit = f"https://api.github.com/search/commits?q={q_commit}"
+    # Commits search requires a specific accept header
+    commit_headers = headers.copy()
+    commit_headers["Accept"] = "application/vnd.github.cloak-preview+json"
+    
+    try:
+        response_commit = requests.get(url_commit, headers=commit_headers, timeout=10)
+        if response_commit.status_code == 200:
+            # Add a mock PR structure for commits so it triggers the same penalty logic
+            for commit in response_commit.json().get('items', []):
+                prs.append({
+                    'title': f"Commit: {commit.get('commit', {}).get('message', '').splitlines()[0]}",
+                    'state': 'closed',  # treat merged commits as closed PRs
+                    'html_url': commit.get('html_url')
+                })
+    except Exception as e:
+        print(f"Error checking related commits for {repo_name}#{issue_number}: {e}")
+
+    return prs
+
+def fetch_contribution_model(repo_name):
+    if not GITHUB_TOKEN:
+        return {}
+    
+    headers = {
+        "Authorization": f"Bearer {GITHUB_TOKEN}",
+        "Accept": "application/vnd.github.v3+json"
+    }
+    
+    model = {
+        "has_contributing": False,
+        "has_pr_template": False,
+        "has_issue_template": False
+    }
+    
+    # Try fetching CONTRIBUTING.md
+    try:
+        url = f"https://api.github.com/repos/{repo_name}/contents/CONTRIBUTING.md"
+        resp = requests.get(url, headers=headers, timeout=5)
+        if resp.status_code == 200:
+            model["has_contributing"] = True
+    except:
+        pass
+        
+    return model
+

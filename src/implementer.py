@@ -171,8 +171,28 @@ def implement(issue_id):
     with open(plan_file, "r") as f:
         plan_content = f.read()
         
+    with open(plan_file, "r") as f:
+        plan_content = f.read()
+        
     worktree_path = create_worktree(org, repo, issue_id)
     print(f"Isolated worktree ready at {worktree_path}.")
+    
+    # Record base commit
+    try:
+        base_commit_proc = subprocess.run(["git", "rev-parse", "HEAD"], cwd=str(worktree_path), capture_output=True, text=True, check=True)
+        base_commit = base_commit_proc.stdout.strip()
+        print(f"Base commit recorded: {base_commit}")
+        with open(reports_dir / "base_commit.txt", "w") as f:
+            f.write(base_commit)
+    except subprocess.CalledProcessError as e:
+        print(f"Failed to record base commit: {e}")
+    
+    # Hide GitHub credentials
+    original_environ = os.environ.copy()
+    if 'GITHUB_TOKEN' in os.environ:
+        del os.environ['GITHUB_TOKEN']
+    if 'GH_TOKEN' in os.environ:
+        del os.environ['GH_TOKEN']
     
     context = f"Issue Title: {issue['title']}\nBody: {issue['body_preview']}\n\nPLAN:\n{plan_content}"
     
@@ -182,6 +202,7 @@ def implement(issue_id):
     except Exception as e:
         print(f"Implementation error: {e}")
         transition_status(issue_id, "IMPLEMENTATION_FAILED")
+        os.environ.update(original_environ)
         return
         
     # Check guardrails
@@ -189,6 +210,7 @@ def implement(issue_id):
     if not passed_guardrails:
         print(f"Validation FAILED: {guardrail_msg}")
         transition_status(issue_id, "IMPLEMENTATION_FAILED")
+        os.environ.update(original_environ)
         return
         
     print("Guardrails passed. Running tests...")
@@ -236,6 +258,8 @@ def implement(issue_id):
         diff_output = ""
         
     generate_reports(issue_id, worktree_path, reports_dir, test_results, diff_output, success)
+    
+    os.environ.update(original_environ)
     
     if success:
         transition_status(issue_id, "IMPLEMENTED_LOCAL")
