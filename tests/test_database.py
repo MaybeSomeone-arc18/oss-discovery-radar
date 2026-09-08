@@ -5,14 +5,6 @@ from src import database
 import tempfile
 
 # Fixture to override DB_PATH to a temporary file for testing
-@pytest.fixture(autouse=True)
-def override_db_path(monkeypatch):
-    fd, path = tempfile.mkstemp()
-    os.close(fd)
-    monkeypatch.setattr(database, "DB_PATH", path)
-    database.init_db()
-    yield
-    os.remove(path)
 
 def test_database_initialization():
     stats = database.get_stats()

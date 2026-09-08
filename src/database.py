@@ -1,10 +1,23 @@
 import sqlite3
 import os
-from src.config import DB_PATH
+import src.config as config
+from contextlib import contextmanager
 
+@contextmanager
 def get_connection():
-    os.makedirs(os.path.dirname(DB_PATH) or '.', exist_ok=True)
-    return sqlite3.connect(DB_PATH)
+    db_path = config.DB_PATH
+    
+    is_test = "PYTEST_CURRENT_TEST" in os.environ or os.environ.get("IS_PYTEST") == "1"
+    if is_test and ("data/radar.db" in db_path or db_path == "data/radar.db"):
+        raise RuntimeError(f"CRITICAL SAFETY ERROR: Test suite is attempting to connect to production database: {db_path}")
+        
+    os.makedirs(os.path.dirname(db_path) or '.', exist_ok=True)
+    conn = sqlite3.connect(db_path, timeout=5.0)
+    try:
+        with conn:
+            yield conn
+    finally:
+        conn.close()
 
 def init_db():
     with get_connection() as conn:
@@ -210,6 +223,12 @@ def init_db():
         # Milestone 10 Correction: Eligibility Gate
         if 'eligibility_status' not in issue_columns:
             cursor.execute("ALTER TABLE issues ADD COLUMN eligibility_status TEXT DEFAULT 'UNKNOWN'")
+            
+        # Milestone 11: Real Contribution Selection
+        if 'first_contribution_score' not in issue_columns:
+            cursor.execute("ALTER TABLE issues ADD COLUMN first_contribution_score REAL")
+        if 'first_contribution_notes' not in issue_columns:
+            cursor.execute("ALTER TABLE issues ADD COLUMN first_contribution_notes TEXT")
         
         # Anti-spam & Personal Learning
         if 'cooldown_until' not in issue_columns:
@@ -411,6 +430,14 @@ def update_eligibility_status(url, eligibility_status):
         cursor.execute('''
         UPDATE issues SET eligibility_status = ? WHERE url = ?
         ''', (eligibility_status, url))
+        conn.commit()
+
+def update_first_contribution_score(url, score, notes):
+    with get_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute('''
+        UPDATE issues SET first_contribution_score = ?, first_contribution_notes = ? WHERE url = ?
+        ''', (score, notes, url))
         conn.commit()
 
 def save_repository_analysis(repo_name, has_readme, has_contributing, has_code_of_conduct, description, test_frameworks, build_systems, pr_patterns):

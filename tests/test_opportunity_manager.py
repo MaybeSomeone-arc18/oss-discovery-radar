@@ -7,13 +7,8 @@ from src.opportunity_manager import (
     transition_status, generate_daily_shortlist, get_history,
     get_changes_summary, select_top_for_research
 )
-from src.config import DB_PATH
-
 @pytest.fixture(autouse=True)
 def setup_test_db():
-    # Use in-memory or test db if possible, here we rely on existing test setup
-    if os.path.exists(DB_PATH):
-        os.remove(DB_PATH)
     init_db()
     with get_connection() as conn:
         c = conn.cursor()
@@ -27,9 +22,6 @@ def setup_test_db():
         ('http://test/3', 'test-org/test-repo', 'test-org', 3, 'Issue 3', 'OPEN', 9.0, 9.0, 8.0, 'WATCHING', CURRENT_TIMESTAMP)
         ''')
         conn.commit()
-    yield
-    if os.path.exists(DB_PATH):
-        os.remove(DB_PATH)
 
 def test_lifecycle_transitions():
     transition_status('http://test/1', 'WATCHING', notes="looks good")

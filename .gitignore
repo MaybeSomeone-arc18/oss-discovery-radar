@@ -8,3 +8,6 @@ digests/*
 data/
 .pytest_cache/
 workspaces/
+tests/.tmp/
+data/test_radar.db
+test_radar.db

@@ -4,14 +4,6 @@ import os
 import json
 from src import database, scoring_engine
 
-@pytest.fixture(autouse=True)
-def override_db_path(monkeypatch):
-    fd, path = tempfile.mkstemp()
-    os.close(fd)
-    monkeypatch.setattr(database, "DB_PATH", path)
-    database.init_db()
-    yield
-    os.remove(path)
 
 def test_database_migrations_and_new_tables():
     stats = database.get_stats()
