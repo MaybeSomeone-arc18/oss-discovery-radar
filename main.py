@@ -146,6 +146,11 @@ def cmd_plan(issue_id):
     from src.hermes_agent import plan
     plan(issue_id)
 
+def cmd_prompt(issue_id):
+    from src.prompt_generator import generate_implementation_prompt
+    prompt = generate_implementation_prompt(issue_id)
+    print(prompt)
+
 def cmd_implement(issue_id, auto_yes=False):
     from src.database import init_db
     init_db()
@@ -218,6 +223,14 @@ def cmd_first_contribution():
         url, repo_name, issue_number, title, body_preview, org_slug, gsoc, fit, depth = row
         score, notes = calculate_first_contribution_score(url)
         if score > 0:
+            # Re-fetch dynamic fields in case they were updated during deep analysis
+            with get_connection() as conn:
+                cur2 = conn.cursor()
+                cur2.execute("SELECT gsoc_preparation_score, engineering_depth FROM issues WHERE url = ?", (url,))
+                row2 = cur2.fetchone()
+                if row2:
+                    gsoc, depth = row2
+            
             scored_candidates.append({
                 "url": url, "repo": repo_name, "num": issue_number, "title": title,
                 "body": body_preview, "org": org_slug, "score": score, "notes": notes,
@@ -331,8 +344,8 @@ def cmd_first_contribution():
     if best['classification'] in ("STRONG_CANDIDATE", "GOOD_ENTRY_POINT") and best['readiness'] == "READY_NOW":
         print(f"\nTriggering Hermes for candidate...")
         from src.hermes_agent import research, plan
-        research(best['url'])
-        plan(best['url'])
+        research(best['num'])
+        plan(best['num'])
     else:
         print(f"\nCandidate is not READY_NOW or STRONG_CANDIDATE. Hermes will not be invoked automatically.")
 
@@ -565,10 +578,43 @@ def cmd_digest():
     generate_daily_digest()
 
 def cmd_daily_run():
-    from src.opportunity_manager import run_daily_pipeline
-    from src.digest_generator import generate_daily_digest
-    run_daily_pipeline()
-    generate_daily_digest()
+    from src.run_log import log_event
+    # This runs the daily pipeline
+    print("Running Daily Update Pipeline...")
+    try:
+        cmd_sync_issues(limit=50)
+        cmd_daily()
+        log_event("sync", "success", "Daily update pipeline completed")
+    except Exception as e:
+        log_event("sync", "failed", f"Daily update pipeline failed: {str(e)}")
+        raise
+    
+def cmd_run_now():
+    from src.resource_manager import check_resources_for_hermes
+    print("Checking resources before run...")
+    # Radar normal work does not require hermes resources, but we could check basic memory anyway.
+    # The requirement says: "Normal Radar work must NOT start Hermes/Qwen."
+    # We just run the daily run.
+    print("Running normal Radar update work (No Hermes)...")
+    cmd_daily_run()
+    
+def cmd_schedule_status():
+    from src.scheduler import schedule_status
+    print(schedule_status())
+
+def cmd_schedule_install(hour, minute):
+    from src.scheduler import install_schedule
+    success, msg = install_schedule(hour, minute)
+    print(msg)
+    
+def cmd_schedule_remove():
+    from src.scheduler import remove_schedule
+    success, msg = remove_schedule()
+    print(msg)
+
+def cmd_serve():
+    from src.dashboard import run_dashboard
+    run_dashboard()
 
 def cmd_research_top():
     from src.opportunity_manager import select_top_for_research, transition_status
@@ -611,15 +657,19 @@ def main():
     analyze_parser = subparsers.add_parser("analyze", help="Prints a detailed contribution brief for an issue.")
     analyze_parser.add_argument("id", help="Issue number or URL")
     
-    research_parser = subparsers.add_parser("research", help="Run local Hermes research on an issue.")
-    research_parser.add_argument("id", help="Issue number or URL")
+    # hermes commands
+    parser_research = subparsers.add_parser("research", help="Run hermes research phase for an issue")
+    parser_research.add_argument("issue_id", help="Numeric issue ID")
+    
+    parser_plan = subparsers.add_parser("plan", help="Run hermes plan phase for an issue")
+    parser_plan.add_argument("issue_id", help="Numeric issue ID")
+    
+    parser_prompt = subparsers.add_parser("prompt", help="Generate an implementation prompt for Antigravity")
+    parser_prompt.add_argument("issue_id", help="Numeric issue ID")
 
-    plan_parser = subparsers.add_parser("plan", help="Generate local Hermes implementation plan for an issue.")
-    plan_parser.add_argument("id", help="Issue number or URL")
-
-    implement_parser = subparsers.add_parser("implement", help="Run local Hermes implementation in an isolated worktree.")
-    implement_parser.add_argument("id", help="Issue number or URL")
-    implement_parser.add_argument("--yes", action="store_true", help="Bypass approval prompt")
+    parser_implement = subparsers.add_parser("implement", help="Run hermes implement phase for an issue")
+    parser_implement.add_argument("issue_id", help="Numeric issue ID")
+    parser_implement.add_argument("--yes", action="store_true", help="Bypass approval prompt")
 
     review_parser = subparsers.add_parser("review", help="Review local Hermes implementation results.")
     review_parser.add_argument("id", help="Issue number or URL")
@@ -661,6 +711,18 @@ def main():
     subparsers.add_parser("research-top", help="Research the single highest value NEW opportunity locally")
     subparsers.add_parser("first-contribution", help="Show the top candidates for first real contribution and run deep validation.")
     
+    # scheduler commands
+    parser_run_now = subparsers.add_parser("run-now", help="Run the normal Radar daily update immediately")
+    parser_sched_status = subparsers.add_parser("schedule-status", help="Check the status of the launchd schedule")
+    
+    parser_sched_inst = subparsers.add_parser("schedule-install", help="Install the daily schedule")
+    parser_sched_inst.add_argument("--hour", type=int, default=2, help="Hour to run (0-23)")
+    parser_sched_inst.add_argument("--minute", type=int, default=0, help="Minute to run (0-59)")
+    
+    parser_sched_rem = subparsers.add_parser("schedule-remove", help="Remove the daily schedule")
+    
+    parser_serve = subparsers.add_parser("serve", help="Start the local web dashboard at http://127.0.0.1:8787")
+
     args = parser.parse_args()
     
     if args.command == "issues":
@@ -670,11 +732,13 @@ def main():
     elif args.command == "repo":
         cmd_repo(args.name)
     elif args.command == "research":
-        cmd_research(args.id)
+        cmd_research(args.issue_id)
     elif args.command == "plan":
-        cmd_plan(args.id)
+        cmd_plan(args.issue_id)
+    elif args.command == "prompt":
+        cmd_prompt(args.issue_id)
     elif args.command == "implement":
-        cmd_implement(args.id, auto_yes=args.yes)
+        cmd_implement(args.issue_id, auto_yes=args.yes)
     elif args.command == "review":
         cmd_review(args.id)
     elif args.command == "workspace":
@@ -717,6 +781,16 @@ def main():
         cmd_digest()
     elif args.command == "daily-run":
         cmd_daily_run()
+    elif args.command == "run-now":
+        cmd_run_now()
+    elif args.command == "schedule-status":
+        cmd_schedule_status()
+    elif args.command == "schedule-install":
+        cmd_schedule_install(args.hour, args.minute)
+    elif args.command == "schedule-remove":
+        cmd_schedule_remove()
+    elif args.command == "serve":
+        cmd_serve()
     elif args.command == "research-top":
         cmd_research_top()
     elif args.command == "first-contribution":

@@ -140,6 +140,19 @@ def init_db():
         ''')
         
         # Issues
+        
+        # Audit Logs
+        cursor.execute('''
+        CREATE TABLE IF NOT EXISTS audit_logs (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            timestamp DATETIME DEFAULT CURRENT_TIMESTAMP,
+            action TEXT NOT NULL,
+            issue_id INTEGER,
+            result TEXT,
+            message TEXT
+        )
+        ''')
+        
         cursor.execute('''
         CREATE TABLE IF NOT EXISTS issues (
             url TEXT PRIMARY KEY,

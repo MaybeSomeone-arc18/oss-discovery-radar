@@ -26,7 +26,7 @@ def verify_local_provider():
 def get_issue_context(issue_id):
     with get_connection() as conn:
         cursor = conn.cursor()
-        cursor.execute("SELECT * FROM issues WHERE issue_number = ? OR url LIKE ?", (issue_id, f"%/{issue_id}"))
+        cursor.execute("SELECT * FROM issues WHERE issue_number = ? OR url = ? OR url LIKE ?", (issue_id, issue_id, f"%/{issue_id}"))
         row = cursor.fetchone()
         if not row:
             return None
@@ -74,22 +74,26 @@ def run_hermes_oneshot(prompt, cwd=None, safe_mode=False):
     except FileNotFoundError:
         raise RuntimeError("Hermes CLI executable missing. Ensure Hermes is installed and in PATH.")
 
-def research(issue_id):
-    print(f"Running Real Hermes Research for Issue {issue_id}...")
+def research(issue_id_or_url):
+    from src.run_log import log_event
+    print(f"Running Real Hermes Research for Issue {issue_id_or_url}...")
     try:
         verify_local_provider()
     except Exception as e:
         print(f"Research failed: {e}")
+        log_event("hermes_research", "failed", f"Local provider verification failed: {e}", issue_id=issue_id_or_url if isinstance(issue_id_or_url, int) else None)
         return
     
-    issue = get_issue_context(issue_id)
+    issue = get_issue_context(issue_id_or_url)
     if not issue:
-        print(f"Issue {issue_id} not found.")
+        print(f"Issue {issue_id_or_url} not found.")
+        log_event("hermes_research", "failed", f"Issue {issue_id_or_url} not found", issue_id=issue_id_or_url if isinstance(issue_id_or_url, int) else None)
         return
         
     org = issue['org_slug']
     repo_name_short = issue['repo_name'].split('/')[1]
-    reports_dir = get_reports_dir(org, repo_name_short, issue_id)
+    issue_number = issue['issue_number']
+    reports_dir = get_reports_dir(org, repo_name_short, issue_number)
     research_file = reports_dir / "research.md"
     raw_file = reports_dir / "research_raw.txt"
     
@@ -145,30 +149,37 @@ Known AI Policy Constraints: No AI-generated code push without human review.
             f.write(response)
             
         print(f"Research saved to {research_file}")
+        log_event("hermes_research", "success", f"Research complete and saved to {research_file}", issue_id=issue_number)
     except Exception as e:
         print(f"Research failed: {e}")
+        log_event("hermes_research", "failed", f"Research failed: {str(e)}", issue_id=issue_number if 'issue_number' in locals() else None)
 
-def plan(issue_id):
-    print(f"Running Real Hermes Plan for Issue {issue_id}...")
+def plan(issue_id_or_url):
+    from src.run_log import log_event
+    print(f"Running Real Hermes Plan for Issue {issue_id_or_url}...")
     try:
         verify_local_provider()
     except Exception as e:
         print(f"Plan failed: {e}")
+        log_event("hermes_plan", "failed", f"Local provider verification failed: {e}", issue_id=issue_id_or_url if isinstance(issue_id_or_url, int) else None)
         return
     
-    issue = get_issue_context(issue_id)
+    issue = get_issue_context(issue_id_or_url)
     if not issue:
-        print(f"Issue {issue_id} not found.")
+        print(f"Issue {issue_id_or_url} not found.")
+        log_event("hermes_plan", "failed", f"Issue {issue_id_or_url} not found", issue_id=issue_id_or_url if isinstance(issue_id_or_url, int) else None)
         return
         
     org = issue['org_slug']
     repo = issue['repo_name'].split('/')[1]
-    reports_dir = get_reports_dir(org, repo, issue_id)
+    issue_number = issue['issue_number']
+    reports_dir = get_reports_dir(org, repo, issue_number)
     research_file = reports_dir / "research.md"
     plan_file = reports_dir / "plan.md"
     
     if not research_file.exists():
         print(f"Research report not found at {research_file}. Run research first.")
+        log_event("hermes_plan", "failed", f"Research report not found", issue_id=issue_number)
         return
         
     with open(research_file, "r") as f:
@@ -205,8 +216,10 @@ Output ONLY the Markdown plan.
             f.write(response)
             
         print(f"Plan saved to {plan_file}")
+        log_event("hermes_plan", "success", f"Plan complete and saved to {plan_file}", issue_id=issue_number)
     except Exception as e:
         print(f"Plan failed: {e}")
+        log_event("hermes_plan", "failed", f"Plan failed: {str(e)}", issue_id=issue_number if 'issue_number' in locals() else None)
 
 def implement_issue_with_hermes(worktree_path, context):
     print(f"Running Hermes implementation in {worktree_path}...")

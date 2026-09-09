@@ -1,6 +1,7 @@
 import os
 from datetime import datetime
 from src.database import get_connection
+from src.run_log import log_event
 
 def generate_daily_digest():
     os.makedirs("digests", exist_ok=True)
@@ -14,21 +15,52 @@ def generate_daily_digest():
         
         # 1. TOP OPPORTUNITIES
         lines.append("## 1. TOP OPPORTUNITIES")
+        
+        # Use the robust filtering from first-contribution
         cursor.execute('''
-        SELECT title, url, org_slug, contribution_value_score, opportunity_score, gsoc_preparation_score
-        FROM issues
-        WHERE lifecycle_status IN ('NEW', 'WATCHING') AND state = 'OPEN'
-        ORDER BY contribution_value_score DESC NULLS LAST, opportunity_score DESC
-        LIMIT 5
+            SELECT i.url, i.repo_name, i.issue_number, i.title, i.body_preview, i.org_slug
+            FROM issues i
+            LEFT JOIN repositories r ON i.repo_name = r.name
+            WHERE i.state = 'OPEN' 
+            AND (i.eligibility_status IS NULL OR i.eligibility_status NOT IN ('BLOCKED', 'SOLVED', 'DUPLICATE', 'BLOCKED_STUDENT_WORK_REPO', 'BLOCKED_RELATED_PR', 'LIKELY_SOLVED'))
+            AND (i.activity_status IS NULL OR i.activity_status IN ('ACTIVE', 'LIKELY_ACTIVE'))
+            AND (i.assignee_status IS NULL OR i.assignee_status != 'ASSIGNED')
+            AND (r.repo_eligibility IS NULL OR r.repo_eligibility NOT IN ('BLOCKED_STUDENT_WORK_REPO', 'BLOCKED_ARCHIVED', 'BLOCKED_FORK_OR_MIRROR'))
         ''')
-        top_opps = cursor.fetchall()
+        rows = cursor.fetchall()
+        
+        from src.contribution_engine import calculate_first_contribution_score
+        from src.deep_analysis import check_release_prerequisites
+        
+        scored_candidates = []
+        for row in rows:
+            url, repo_name, issue_number, title, body_preview, org_slug = row
+            score, notes = calculate_first_contribution_score(url)
+            if score > 0:
+                # Re-fetch dynamic fields
+                cur2 = conn.cursor()
+                cur2.execute("SELECT gsoc_preparation_score FROM issues WHERE url = ?", (url,))
+                row2 = cur2.fetchone()
+                gsoc = row2[0] if row2 else None
+                
+                # Check readiness
+                readiness, read_ev = check_release_prerequisites(repo_name, title, body_preview)
+                if readiness == "READY_NOW":
+                    scored_candidates.append({
+                        "url": url, "repo": repo_name, "num": issue_number, "title": title,
+                        "score": score, "gsoc": gsoc, "readiness": readiness
+                    })
+                    
+        scored_candidates.sort(key=lambda x: x["score"], reverse=True)
+        top_opps = scored_candidates[:5]
+        
         if not top_opps:
-            lines.append("No top opportunities found today.")
+            lines.append("No top eligible opportunities found today.")
         else:
             for opp in top_opps:
-                cval = f"{opp[3]:.1f}" if opp[3] else "N/A"
-                fit = f"{opp[4]:.1f}" if opp[4] else "N/A"
-                lines.append(f"- **[{opp[2]}]** [{opp[0]}]({opp[1]})\n  - Value: {cval} | Fit: {fit}")
+                gsoc_str = f"{opp['gsoc']:.1f}" if opp['gsoc'] else "N/A"
+                lines.append(f"- **[{opp['repo']}#{opp['num']}]** [{opp['title']}]({opp['url']})\n  - Score: {opp['score']:.1f} | Readiness: {opp['readiness']} | GSoC: {gsoc_str}")
+                lines.append(f"  - Action: Run `python main.py prompt {opp['num']}` or `python main.py research {opp['num']}`")
         lines.append("")
         
         # 2. WHAT CHANGED
@@ -77,10 +109,41 @@ def generate_daily_digest():
         lines.append("No recorded program deadlines right now.")
         lines.append("")
         
-        # 7. RECOMMENDED NEXT ACTION
+        # 7. RECOMMENDED NEXT ACTION & HERMES TRIGGER
         lines.append("## 7. RECOMMENDED NEXT ACTION")
         if top_opps:
-            lines.append(f"Consider running `python main.py research-top` to start researching the highest value opportunity: **{top_opps[0][0]}**.")
+            best = top_opps[0]
+            lines.append(f"The highest value opportunity is **{best['repo']}#{best['num']}** with score {best['score']:.1f}.")
+            
+            # Check configurable threshold (e.g. from agent.yaml)
+            from src.implementer import get_agent_config
+            from src.resource_manager import check_resources_for_hermes
+            
+            config = get_agent_config()
+            threshold = config.get('hermes_auto_trigger_threshold', 50.0)
+            
+            if best['score'] >= threshold:
+                lines.append(f"\nScore {best['score']:.1f} >= {threshold} threshold. Attempting to trigger Hermes...")
+                ok, msg = check_resources_for_hermes()
+                if ok:
+                    lines.append(f"Resource check passed: {msg}. Triggering Hermes research/plan...")
+                    # Avoid cyclic imports by doing this here
+                    try:
+                        from src.hermes_agent import research, plan
+                        # Call in background or directly, here we call directly
+                        print(f"Auto-triggering Hermes for top opportunity: {best['num']}")
+                        log_event("hermes_auto_trigger", "success", f"Triggered Hermes for {best['repo']}#{best['num']}", issue_id=best['num'])
+                        research(best['url'])
+                        plan(best['url'])
+                        lines.append(f"Successfully ran Hermes research/plan for {best['num']}.")
+                    except Exception as e:
+                        log_event("hermes_auto_trigger", "failed", f"Failed to run Hermes: {e}", issue_id=best['num'])
+                        lines.append(f"Failed to run Hermes: {e}")
+                else:
+                    log_event("hermes_auto_trigger", "skipped", f"Insufficient resources: {msg}", issue_id=best['num'])
+                    lines.append(f"Skipping Hermes auto-trigger due to resources: {msg}")
+            else:
+                lines.append(f"\nScore {best['score']:.1f} < {threshold} threshold. Skipping Hermes auto-trigger.")
         else:
             lines.append("Run `python main.py daily-run` to fetch new data.")
             
@@ -88,3 +151,4 @@ def generate_daily_digest():
         f.write("\n".join(lines))
         
     print(f"Generated daily digest at {filepath}")
+    log_event("digest", "success", f"Generated digest at {filepath}")

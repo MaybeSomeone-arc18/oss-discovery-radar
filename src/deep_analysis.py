@@ -74,6 +74,8 @@ def check_release_prerequisites(repo_full_name, title, body):
     if resp.status_code == 200:
         releases = resp.json()
         for r in releases:
+            if r.get('prerelease', False):
+                continue
             if required_version in r.get('tag_name', '') or required_version in r.get('name', ''):
                 return "READY_NOW", f"Required version {required_version} is already released."
                 
@@ -83,7 +85,10 @@ def check_release_prerequisites(repo_full_name, title, body):
     if resp_tags.status_code == 200:
         tags = resp_tags.json()
         for t in tags:
-            if required_version in t.get('name', ''):
+            t_name = t.get('name', '').lower()
+            if any(x in t_name for x in ['alpha', 'beta', 'rc']):
+                continue
+            if required_version in t_name:
                 return "READY_NOW", f"Required version {required_version} found in tags."
                 
     return "WAITING_ON_RELEASE", f"Waiting on unreleased version: {required_version}"

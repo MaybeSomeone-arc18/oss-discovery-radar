@@ -67,6 +67,7 @@ def test_research_command(mock_run, mock_analysis, mock_context, mock_verify, tm
     mock_context.return_value = {
         'repo_name': 'test/repo',
         'org_slug': 'test',
+        'issue_number': 123,
         'title': 'Test Issue',
         'body_preview': 'Body',
         'labels': 'bug',
