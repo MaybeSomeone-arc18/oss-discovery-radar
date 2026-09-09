@@ -135,3 +135,33 @@ def test_plan_returns_false_when_research_missing(mock_context, mock_verify, tmp
     }
     with patch("src.hermes_agent.get_reports_dir", return_value=tmp_path):
         assert plan(123) is False
+
+
+@patch("requests.get")
+def test_list_local_models(mock_get):
+    mock_response = MagicMock()
+    mock_response.status_code = 200
+    mock_response.json.return_value = {
+        "models": [
+            {"name": "qwen3.5:9b", "size": 6594474711},
+            {"name": "llama3.2:3b", "size": 2019393189},
+        ]
+    }
+    mock_get.return_value = mock_response
+
+    from src.hermes_agent import list_local_models
+
+    models = list_local_models()
+
+    assert models == [
+        {"name": "qwen3.5:9b", "size": 6594474711},
+        {"name": "llama3.2:3b", "size": 2019393189},
+    ]
+
+
+@patch("requests.get", side_effect=requests.exceptions.ConnectionError("Connection refused"))
+def test_list_local_models_unreachable(mock_get):
+    from src.hermes_agent import OllamaUnavailableError, list_local_models
+
+    with pytest.raises(OllamaUnavailableError, match="unreachable"):
+        list_local_models()

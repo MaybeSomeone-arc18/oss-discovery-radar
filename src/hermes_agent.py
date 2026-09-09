@@ -10,6 +10,30 @@ from src.sandbox_runner import discover_and_run_tests
 class OllamaUnavailableError(RuntimeError):
     pass
 
+
+def list_local_models():
+    """Return installed Ollama models as name/size records."""
+    import requests
+
+    try:
+        resp = requests.get("http://127.0.0.1:11434/api/tags", timeout=5)
+        if resp.status_code != 200:
+            raise OllamaUnavailableError(
+                f"Ollama model inventory failed with {resp.status_code}: {resp.text}"
+            )
+        return [
+            {
+                "name": model.get("name"),
+                "size": model.get("size"),
+            }
+            for model in resp.json().get("models", [])
+        ]
+    except requests.exceptions.RequestException as exc:
+        raise OllamaUnavailableError(
+            f"Ollama model inventory is unreachable: {exc}"
+        )
+
+
 def verify_local_provider():
     config_path = os.path.expanduser("~/.hermes/config.yaml")
     if not os.path.exists(config_path):
