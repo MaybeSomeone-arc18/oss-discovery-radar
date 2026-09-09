@@ -1,3 +1,4 @@
+from src.contribution_engine import is_engineering_contribution
 import sys
 import argparse
 import json
@@ -229,7 +230,7 @@ def cmd_first_contribution():
                 cur2.execute("SELECT gsoc_preparation_score, engineering_depth FROM issues WHERE url = ?", (url,))
                 row2 = cur2.fetchone()
                 if row2:
-                    gsoc, depth = row2
+                    gsoc, depth = row2[:2]
             
             scored_candidates.append({
                 "url": url, "repo": repo_name, "num": issue_number, "title": title,
@@ -251,8 +252,16 @@ def cmd_first_contribution():
             
         num = cand["num"]
         
+        if not is_engineering_contribution(cand["title"], cand["body"]):
+            print(f"Skipping {repo}#{num}: non-engineering contribution.")
+            continue
+
         # Live PR Check
-        prs = check_related_prs(repo, num)
+        try:
+            prs = check_related_prs(repo, num)
+        except RuntimeError as e:
+            print(f"Skipping {repo}#{num}: PR validation unavailable: {e}")
+            continue
         if prs:
             continue
             
@@ -342,10 +351,23 @@ def cmd_first_contribution():
     print(f"\nPreflight report generated at {report_path}")
     
     if best['classification'] in ("STRONG_CANDIDATE", "GOOD_ENTRY_POINT") and best['readiness'] == "READY_NOW":
+        from src.autonomous_guard import validate_hermes_execution
+
+        ok, msg = validate_hermes_execution()
+        if not ok:
+            print(f"\nHermes preflight failed. Skipping automatic research/plan: {msg}")
+            return
+
         print(f"\nTriggering Hermes for candidate...")
         from src.hermes_agent import research, plan
-        research(best['num'])
-        plan(best['num'])
+
+        if not research(best['num']):
+            print("Hermes research failed. Plan phase will not run.")
+            return
+
+        if not plan(best['num']):
+            print("Hermes planning failed.")
+            return
     else:
         print(f"\nCandidate is not READY_NOW or STRONG_CANDIDATE. Hermes will not be invoked automatically.")
 
@@ -616,6 +638,20 @@ def cmd_serve():
     from src.dashboard import run_dashboard
     run_dashboard()
 
+def cmd_ollama_install():
+    from src.ollama_manager import install_ollama
+    success, msg = install_ollama()
+    print(msg)
+
+def cmd_ollama_remove():
+    from src.ollama_manager import remove_ollama
+    success, msg = remove_ollama()
+    print(msg)
+
+def cmd_ollama_status():
+    from src.ollama_manager import ollama_status
+    print(ollama_status())
+
 def cmd_research_top():
     from src.opportunity_manager import select_top_for_research, transition_status
     from src.hermes_agent import research
@@ -624,9 +660,40 @@ def cmd_research_top():
         print("No valid opportunity found for top research.")
         return
     print(f"Selected top opportunity issue #{issue_id} for research.")
-    research(issue_id)
+
+    from src.autonomous_guard import validate_hermes_execution
+
+    ok, msg = validate_hermes_execution()
+    if not ok:
+        print(f"Hermes preflight failed. Skipping research: {msg}")
+        return
+
+    if not research(issue_id):
+        print(f"Research failed for issue #{issue_id}.")
+        return
+
     transition_status(issue_id, "RESEARCHED")
     print(f"Marked {issue_id} as RESEARCHED.")
+
+def cmd_autonomous(issue_id):
+    from src.autonomous_contributor import run_autonomous
+
+    try:
+        result = run_autonomous(issue_id)
+        if result is not None:
+            print(f"Autonomous contribution complete: {result}")
+    except Exception as e:
+        print(f"Autonomous contribution failed: {e}")
+
+def cmd_autonomous_best():
+    from src.autonomous_contributor import run_best_autonomous
+
+    try:
+        result = run_best_autonomous()
+        if result is not None:
+            print(f"Autonomous best-candidate run complete: {result}")
+    except Exception as e:
+        print(f"Autonomous best-candidate run failed: {e}")
 
 def main():
     import argparse
@@ -723,6 +790,22 @@ def main():
     
     parser_serve = subparsers.add_parser("serve", help="Start the local web dashboard at http://127.0.0.1:8787")
 
+    subparsers.add_parser("ollama-install", help="Install and start the Ollama launchd daemon")
+    subparsers.add_parser("ollama-remove", help="Remove the Ollama launchd daemon")
+    subparsers.add_parser("ollama-status", help="Check status of the Ollama launchd daemon")
+
+    parser_autonomous = subparsers.add_parser(
+        "autonomous",
+        help="Run the full local autonomous contribution pipeline"
+    )
+    parser_autonomous.add_argument("issue_id", type=int)
+    subparsers.add_parser(
+        "autonomous-best",
+        help="Run the autonomous pipeline on the best READY_NOW candidate"
+    )
+
+
+
     args = parser.parse_args()
     
     if args.command == "issues":
@@ -791,6 +874,16 @@ def main():
         cmd_schedule_remove()
     elif args.command == "serve":
         cmd_serve()
+    elif args.command == "ollama-install":
+        cmd_ollama_install()
+    elif args.command == "ollama-remove":
+        cmd_ollama_remove()
+    elif args.command == "autonomous-best":
+        cmd_autonomous_best()
+    elif args.command == "autonomous":
+        cmd_autonomous(args.issue_id)
+    elif args.command == "ollama-status":
+        cmd_ollama_status()
     elif args.command == "research-top":
         cmd_research_top()
     elif args.command == "first-contribution":
