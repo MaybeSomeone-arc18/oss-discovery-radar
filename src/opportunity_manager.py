@@ -23,7 +23,7 @@ def transition_status(issue_url, new_status, reason=None, notes=None, difficulty
         elif new_status == 'PLANNED':
             updates.append("planned = 1")
         elif new_status == 'IN_PROGRESS':
-            updates.append("implemented = 1")
+            pass
         elif new_status == 'SUBMITTED':
             updates.append("submitted = 1")
         elif new_status == 'MERGED':

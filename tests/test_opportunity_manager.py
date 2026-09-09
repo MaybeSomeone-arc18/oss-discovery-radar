@@ -69,3 +69,11 @@ def test_select_top_for_research():
     transition_status('http://test/3', 'RESEARCHED')
     top2 = select_top_for_research()
     assert top2 == 1 # Next best is 1
+
+def test_in_progress_does_not_mark_implemented():
+    transition_status("http://test/1", "IN_PROGRESS")
+
+    hist = get_history("http://test/1")
+
+    assert hist["lifecycle_status"] == "IN_PROGRESS"
+    assert hist["implemented"] == 0
