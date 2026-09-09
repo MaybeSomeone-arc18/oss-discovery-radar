@@ -52,3 +52,18 @@ def test_check_resources_for_hermes_low_disk(mock_disk, mock_mem):
     ok, msg = check_resources_for_hermes(min_memory_mb=4096, min_disk_mb=2048)
     assert ok is False
     assert "Insufficient disk" in msg
+
+
+@patch('sys.platform', 'darwin')
+@patch('subprocess.check_output')
+def test_get_available_memory_mb_mac_16k_page_size(mock_check_output):
+    mock_check_output.return_value = '''Mach Virtual Memory Statistics: (page size of 16384 bytes)
+
+Pages free:       1000.
+Pages inactive:   500.
+'''
+
+    mem = get_available_memory_mb()
+
+    # (1000 + 500) * 16384 / (1024 * 1024) = 23.4375 MB
+    assert 23 < mem < 24
