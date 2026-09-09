@@ -31,14 +31,21 @@ def get_available_memory_mb():
         return 8192
 
 
-def check_resources_for_hermes(min_memory_mb=4096, min_disk_mb=2048):
+DEFAULT_HERMES_MEMORY_HEADROOM_MB = 8192
+
+
+def check_resources_for_hermes(min_memory_mb=None, min_disk_mb=2048):
     """Return (True, message) when resources are sufficient for Hermes."""
+    if min_memory_mb is None:
+        min_memory_mb = DEFAULT_HERMES_MEMORY_HEADROOM_MB
+
     avail_mem = get_available_memory_mb()
 
     if avail_mem < min_memory_mb:
+        reason = "memory headroom" if min_memory_mb == DEFAULT_HERMES_MEMORY_HEADROOM_MB else "memory"
         return (
             False,
-            f"Insufficient memory. Available: {avail_mem:.0f}MB, "
+            f"Insufficient {reason}. Available: {avail_mem:.0f}MB, "
             f"Required: {min_memory_mb}MB",
         )
 

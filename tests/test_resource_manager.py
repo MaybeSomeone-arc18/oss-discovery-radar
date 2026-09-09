@@ -67,3 +67,27 @@ Pages inactive:   500.
 
     # (1000 + 500) * 16384 / (1024 * 1024) = 23.4375 MB
     assert 23 < mem < 24
+
+
+@patch('src.resource_manager.get_available_memory_mb')
+@patch('shutil.disk_usage')
+def test_check_resources_for_hermes_rejects_heavy_load_when_multitasking(mock_disk, mock_mem):
+    mock_mem.return_value = 7000
+    mock_disk.return_value = (100000000000, 50000000000, 50000000000)
+
+    ok, msg = check_resources_for_hermes()
+
+    assert ok is False
+    assert "memory headroom" in msg.lower()
+
+
+@patch('src.resource_manager.get_available_memory_mb')
+@patch('shutil.disk_usage')
+def test_check_resources_for_hermes_allows_heavy_load_with_headroom(mock_disk, mock_mem):
+    mock_mem.return_value = 9000
+    mock_disk.return_value = (100000000000, 50000000000, 50000000000)
+
+    ok, msg = check_resources_for_hermes()
+
+    assert ok is True
+    assert "Resources sufficient" in msg
