@@ -2,6 +2,19 @@ from src.hermes_agent import verify_local_provider, get_issue_context
 from src.resource_manager import check_resources_for_hermes
 
 
+def validate_hermes_execution():
+    try:
+        verify_local_provider()
+    except Exception as exc:
+        return False, f"Hermes unavailable: {exc}"
+
+    resources_ok, resource_msg = check_resources_for_hermes()
+    if not resources_ok:
+        return False, resource_msg
+
+    return True, "Hermes execution validated."
+
+
 def validate_autonomous_run(issue_id: int):
     issue = get_issue_context(issue_id)
     if not issue:
@@ -21,13 +34,8 @@ def validate_autonomous_run(issue_id: int):
     if issue.get("eligibility_status") in blocked:
         return False, f"Issue is ineligible: {issue.get('eligibility_status')}"
 
-    try:
-        verify_local_provider()
-    except Exception as exc:
-        return False, f"Hermes unavailable: {exc}"
-
-    resources_ok, resource_msg = check_resources_for_hermes()
-    if not resources_ok:
-        return False, resource_msg
+    execution_ok, execution_reason = validate_hermes_execution()
+    if not execution_ok:
+        return False, execution_reason
 
     return True, "Autonomous run validated."

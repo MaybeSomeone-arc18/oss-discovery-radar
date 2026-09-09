@@ -1,6 +1,8 @@
 import pytest
-from unittest.mock import patch, mock_open, MagicMock
+import os
 import subprocess
+import requests
+from unittest.mock import patch, mock_open, MagicMock
 
 from src.hermes_agent import (
     verify_local_provider,
@@ -17,7 +19,11 @@ model:
 """
     with patch("os.path.exists", return_value=True):
         with patch("builtins.open", mock_open(read_data=valid_yaml)):
-            verify_local_provider()
+            with patch("requests.get") as mock_get:
+                mock_get.return_value.status_code = 200
+                mock_get.return_value.json.return_value = {"models": [{"name": "qwen3.5:9b"}]}
+                verify_local_provider()
+                mock_get.assert_called_once()
 
 def test_verify_local_provider_wrong_model():
     invalid_yaml = """
@@ -40,6 +46,32 @@ model:
         with patch("builtins.open", mock_open(read_data=invalid_yaml)):
             with pytest.raises(RuntimeError, match="not local/custom"):
                 verify_local_provider()
+
+def test_verify_local_provider_unreachable():
+    valid_yaml = """
+model:
+  default: qwen3.5:9b
+  provider: custom
+"""
+    with patch("os.path.exists", return_value=True):
+        with patch("builtins.open", mock_open(read_data=valid_yaml)):
+            with patch("requests.get", side_effect=requests.exceptions.ConnectionError("Connection refused")):
+                with pytest.raises(RuntimeError, match="unreachable"):
+                    verify_local_provider()
+
+def test_verify_local_provider_bad_status():
+    valid_yaml = """
+model:
+  default: qwen3.5:9b
+  provider: custom
+"""
+    with patch("os.path.exists", return_value=True):
+        with patch("builtins.open", mock_open(read_data=valid_yaml)):
+            with patch("requests.get") as mock_post:
+                mock_post.return_value.status_code = 500
+                mock_post.return_value.text = "Internal Server Error"
+                with pytest.raises(RuntimeError, match="failed with 500"):
+                    verify_local_provider()
 
 def test_run_hermes_oneshot_success():
     mock_result = MagicMock()
@@ -80,7 +112,26 @@ def test_research_command(mock_run, mock_analysis, mock_context, mock_verify, tm
     mock_run.return_value = "[FACT] The issue is simple."
     
     with patch("src.hermes_agent.get_reports_dir", return_value=tmp_path):
-        research(123)
+        result = research(123)
+        assert result is True
         assert mock_run.called
         assert (tmp_path / "research.md").exists()
         assert (tmp_path / "research.md").read_text() == "[FACT] The issue is simple."
+
+
+@patch("src.hermes_agent.verify_local_provider")
+@patch("src.hermes_agent.get_issue_context", return_value=None)
+def test_research_returns_false_when_issue_missing(mock_context, mock_verify):
+    assert research(123) is False
+
+
+@patch("src.hermes_agent.verify_local_provider")
+@patch("src.hermes_agent.get_issue_context")
+def test_plan_returns_false_when_research_missing(mock_context, mock_verify, tmp_path):
+    mock_context.return_value = {
+        "repo_name": "test/repo",
+        "org_slug": "test",
+        "issue_number": 123,
+    }
+    with patch("src.hermes_agent.get_reports_dir", return_value=tmp_path):
+        assert plan(123) is False

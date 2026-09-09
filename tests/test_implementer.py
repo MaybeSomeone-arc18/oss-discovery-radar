@@ -120,3 +120,52 @@ def test_failed_implementation_repair_loop(mock_open, mock_exists, mock_gen_repo
     from src.opportunity_manager import get_history
     hist = get_history(999)
     assert hist['lifecycle_status'] == 'IMPLEMENTATION_FAILED'
+
+
+@patch('src.implementer.requests.get')
+@patch('src.implementer.subprocess.run')
+@patch('src.implementer.create_worktree')
+@patch('src.implementer.implement_issue_with_hermes')
+@patch('src.implementer.check_diff_guardrails')
+@patch('src.implementer.discover_and_run_tests')
+@patch('src.implementer.generate_reports')
+@patch('src.implementer.Path.exists')
+@patch('builtins.open')
+def test_implementation_marks_in_progress_before_hermes(
+    mock_open,
+    mock_exists,
+    mock_gen_reports,
+    mock_run_tests,
+    mock_guardrails,
+    mock_hermes,
+    mock_worktree,
+    mock_subprocess_run,
+    mock_requests_get,
+):
+    mock_exists.return_value = True
+    mock_worktree.return_value = Path("/tmp/fake/worktree")
+    mock_guardrails.return_value = (True, "OK")
+    mock_subprocess_run.return_value = MagicMock(stdout="", returncode=0)
+
+    mock_resp = MagicMock()
+    mock_resp.status_code = 200
+    mock_resp.json.return_value = {"title": "Issue 999"}
+    mock_requests_get.return_value = mock_resp
+
+    mock_run_tests.return_value = [{"framework": "pytest", "result": {"success": True}}]
+
+    from src.opportunity_manager import get_history
+
+    assert get_history(999)["lifecycle_status"] == "PLANNED"
+
+    observed_states = []
+
+    def observe_lifecycle(*args, **kwargs):
+        observed_states.append(get_history(999)["lifecycle_status"])
+        return "mock implementation"
+
+    mock_hermes.side_effect = observe_lifecycle
+
+    implement(999)
+
+    assert observed_states == ["IN_PROGRESS"]

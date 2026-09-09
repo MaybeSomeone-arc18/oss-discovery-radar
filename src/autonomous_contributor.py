@@ -13,15 +13,19 @@ def _run_pipeline(issue_id: int) -> tuple:
     repo = issue["repo_name"].split("/")[1]
     reports_dir = get_reports_dir(org, repo, issue_id)
 
-    research(issue_id)
+    if not research(issue_id):
+        raise RuntimeError("Research phase failed.")
+
     research_file = reports_dir / "research.md"
     if not research_file.exists():
-        raise RuntimeError("Research phase did not produce research.md.")
+        raise RuntimeError("Research phase reported success but did not produce research.md.")
 
-    plan(issue_id)
+    if not plan(issue_id):
+        raise RuntimeError("Plan phase failed.")
+
     plan_file = reports_dir / "plan.md"
     if not plan_file.exists():
-        raise RuntimeError("Plan phase did not produce plan.md.")
+        raise RuntimeError("Plan phase reported success but did not produce plan.md.")
 
     success, test_results, diff_stat = implement(issue_id)
 

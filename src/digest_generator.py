@@ -124,24 +124,46 @@ def generate_daily_digest():
             
             if best['score'] >= threshold:
                 lines.append(f"\nScore {best['score']:.1f} >= {threshold} threshold. Attempting to trigger Hermes...")
-                ok, msg = check_resources_for_hermes()
+                from src.autonomous_guard import validate_hermes_execution
+
+                ok, msg = validate_hermes_execution()
                 if ok:
-                    lines.append(f"Resource check passed: {msg}. Triggering Hermes research/plan...")
-                    # Avoid cyclic imports by doing this here
+                    lines.append(f"Hermes preflight passed: {msg}. Triggering Hermes research/plan...")
                     try:
                         from src.hermes_agent import research, plan
-                        # Call in background or directly, here we call directly
                         print(f"Auto-triggering Hermes for top opportunity: {best['num']}")
-                        log_event("hermes_auto_trigger", "success", f"Triggered Hermes for {best['repo']}#{best['num']}", issue_id=best['num'])
-                        research(best['url'])
-                        plan(best['url'])
+
+                        research_ok = research(best['url'])
+                        if not research_ok:
+                            raise RuntimeError("Research phase failed.")
+
+                        plan_ok = plan(best['url'])
+                        if not plan_ok:
+                            raise RuntimeError("Plan phase failed.")
+
+                        log_event(
+                            "hermes_auto_trigger",
+                            "success",
+                            f"Triggered Hermes research/plan for {best['repo']}#{best['num']}",
+                            issue_id=best['num'],
+                        )
                         lines.append(f"Successfully ran Hermes research/plan for {best['num']}.")
                     except Exception as e:
-                        log_event("hermes_auto_trigger", "failed", f"Failed to run Hermes: {e}", issue_id=best['num'])
+                        log_event(
+                            "hermes_auto_trigger",
+                            "failed",
+                            f"Failed to run Hermes: {e}",
+                            issue_id=best['num'],
+                        )
                         lines.append(f"Failed to run Hermes: {e}")
                 else:
-                    log_event("hermes_auto_trigger", "skipped", f"Insufficient resources: {msg}", issue_id=best['num'])
-                    lines.append(f"Skipping Hermes auto-trigger due to resources: {msg}")
+                    log_event(
+                        "hermes_auto_trigger",
+                        "skipped",
+                        f"Hermes preflight failed: {msg}",
+                        issue_id=best['num'],
+                    )
+                    lines.append(f"Skipping Hermes auto-trigger: {msg}")
             else:
                 lines.append(f"\nScore {best['score']:.1f} < {threshold} threshold. Skipping Hermes auto-trigger.")
         else:

@@ -7,21 +7,43 @@ from src.database import get_connection
 from src.workspace_manager import WORKSPACES_ROOT, create_worktree
 from src.sandbox_runner import discover_and_run_tests
 
+class OllamaUnavailableError(RuntimeError):
+    pass
+
 def verify_local_provider():
     config_path = os.path.expanduser("~/.hermes/config.yaml")
     if not os.path.exists(config_path):
         raise RuntimeError("Hermes config not found. Please ensure Hermes is installed and configured.")
-        
+
     with open(config_path, "r") as f:
         config = yaml.safe_load(f)
-        
+
     model_conf = config.get("model", {})
     if model_conf.get("default") != "qwen3.5:9b":
         raise RuntimeError(f"Safety Error: Hermes model is not qwen3.5:9b. Currently set to: {model_conf.get('default')}")
-        
+
     provider = model_conf.get("provider", "")
     if provider not in ("custom", "local"):
         raise RuntimeError(f"Safety Error: Hermes provider is not local/custom. Currently set to: {provider}")
+
+    base_url = model_conf.get("base_url", "http://127.0.0.1:11434/v1")
+    model_name = model_conf.get("default")
+
+    # Standardize the base URL for Ollama API by removing /v1 if present
+    ollama_api_base = base_url.replace("/v1", "")
+
+    import requests
+    try:
+        resp = requests.get(f"{ollama_api_base}/api/tags", timeout=5)
+        if resp.status_code != 200:
+            raise OllamaUnavailableError(f"Hermes inference provider failed with {resp.status_code}: {resp.text}")
+
+        tags = resp.json().get("models", [])
+        if not any(t.get("name") == model_name or t.get("name") == f"{model_name}:latest" for t in tags):
+            raise RuntimeError(f"Model {model_name} is not installed in local Ollama.")
+
+    except requests.exceptions.RequestException as e:
+        raise OllamaUnavailableError(f"Hermes inference provider is unreachable at {ollama_api_base}: {e}")
 
 def get_issue_context(issue_id):
     with get_connection() as conn:
@@ -51,28 +73,50 @@ def get_reports_dir(org, repo, issue_id):
 def run_hermes_oneshot(prompt, cwd=None, safe_mode=False):
     cmd = ["hermes", "-z", prompt]
     # Removed --safe-mode because it ignores ~/.hermes/config.yaml and disables custom_providers
-    
     try:
-        result = subprocess.run(cmd, cwd=cwd, capture_output=True, text=True, timeout=900)
+        kwargs = {
+            "cwd": cwd,
+            "capture_output": True,
+            "text": True,
+            "timeout": 900,
+        }
+        if os.name == "posix":
+            kwargs["start_new_session"] = True
+
+        result = subprocess.run(cmd, **kwargs)
+
         if result.returncode != 0:
             err = result.stderr.lower()
             if "connection refused" in err or "unreachable" in err or "connect" in err:
-                raise RuntimeError(f"Ollama/Hermes provider unreachable. Check if ollama serve is running.\nDetails: {result.stderr}")
+                raise RuntimeError(
+                    f"Ollama/Hermes provider unreachable. Check if ollama serve is running.\n"
+                    f"Details: {result.stderr}"
+                )
             if "model not found" in err or "not available" in err:
-                raise RuntimeError(f"Model unavailable. Make sure qwen3.5:9b is pulled.\nDetails: {result.stderr}")
+                raise RuntimeError(
+                    f"Model unavailable. Make sure qwen3.5:9b is pulled.\nDetails: {result.stderr}"
+                )
             if "context length" in err or "context too small" in err:
-                raise RuntimeError(f"Context too small. Adjust config or model parameters.\nDetails: {result.stderr}")
-            raise RuntimeError(f"Hermes CLI failed with code {result.returncode}:\n{result.stderr}")
-            
+                raise RuntimeError(
+                    f"Context too small. Adjust config or model parameters.\nDetails: {result.stderr}"
+                )
+            raise RuntimeError(
+                f"Hermes CLI failed with code {result.returncode}:\n{result.stderr}"
+            )
+
         out = result.stdout.strip()
         if not out:
             raise RuntimeError("Malformed output: Hermes CLI returned empty response.")
-            
         return out
+
     except subprocess.TimeoutExpired:
-        raise RuntimeError("Hermes CLI timed out after 900 seconds. Model execution might be stuck or too slow.")
+        raise RuntimeError(
+            "Hermes CLI timed out after 900 seconds. Model execution might be stuck or too slow."
+        )
     except FileNotFoundError:
-        raise RuntimeError("Hermes CLI executable missing. Ensure Hermes is installed and in PATH.")
+        raise RuntimeError(
+            "Hermes CLI executable missing. Ensure Hermes is installed and in PATH."
+        )
 
 def research(issue_id_or_url):
     from src.run_log import log_event
@@ -82,23 +126,23 @@ def research(issue_id_or_url):
     except Exception as e:
         print(f"Research failed: {e}")
         log_event("hermes_research", "failed", f"Local provider verification failed: {e}", issue_id=issue_id_or_url if isinstance(issue_id_or_url, int) else None)
-        return
-    
+        return False
+
     issue = get_issue_context(issue_id_or_url)
     if not issue:
         print(f"Issue {issue_id_or_url} not found.")
         log_event("hermes_research", "failed", f"Issue {issue_id_or_url} not found", issue_id=issue_id_or_url if isinstance(issue_id_or_url, int) else None)
-        return
-        
+        return False
+
     org = issue['org_slug']
     repo_name_short = issue['repo_name'].split('/')[1]
     issue_number = issue['issue_number']
     reports_dir = get_reports_dir(org, repo_name_short, issue_number)
     research_file = reports_dir / "research.md"
     raw_file = reports_dir / "research_raw.txt"
-    
+
     repo_analysis = get_repo_analysis(issue['repo_name'])
-    
+
     prompt = f"""You are a research agent for OSS Discovery Radar.
 Analyze the following GitHub issue and repository context.
 Output a structured Markdown research report with the following sections exactly:
@@ -136,20 +180,21 @@ Has CONTRIBUTING: {repo_analysis.get('has_contributing', False)}
 Test Frameworks: {repo_analysis.get('test_frameworks', '[]')}
 Known AI Policy Constraints: No AI-generated code push without human review.
 """
-    
+
     prompt += "\nOutput ONLY the Markdown report."
 
     try:
         response = run_hermes_oneshot(prompt, safe_mode=True)
-        
+
         with open(raw_file, "w") as f:
             f.write(response)
-            
+
         with open(research_file, "w") as f:
             f.write(response)
-            
+
         print(f"Research saved to {research_file}")
         log_event("hermes_research", "success", f"Research complete and saved to {research_file}", issue_id=issue_number)
+        return True
     except Exception as e:
         print(f"Research failed: {e}")
         log_event("hermes_research", "failed", f"Research failed: {str(e)}", issue_id=issue_number if 'issue_number' in locals() else None)
@@ -162,29 +207,29 @@ def plan(issue_id_or_url):
     except Exception as e:
         print(f"Plan failed: {e}")
         log_event("hermes_plan", "failed", f"Local provider verification failed: {e}", issue_id=issue_id_or_url if isinstance(issue_id_or_url, int) else None)
-        return
-    
+        return False
+
     issue = get_issue_context(issue_id_or_url)
     if not issue:
         print(f"Issue {issue_id_or_url} not found.")
         log_event("hermes_plan", "failed", f"Issue {issue_id_or_url} not found", issue_id=issue_id_or_url if isinstance(issue_id_or_url, int) else None)
-        return
-        
+        return False
+
     org = issue['org_slug']
     repo = issue['repo_name'].split('/')[1]
     issue_number = issue['issue_number']
     reports_dir = get_reports_dir(org, repo, issue_number)
     research_file = reports_dir / "research.md"
     plan_file = reports_dir / "plan.md"
-    
+
     if not research_file.exists():
         print(f"Research report not found at {research_file}. Run research first.")
         log_event("hermes_plan", "failed", f"Research report not found", issue_id=issue_number)
-        return
-        
+        return False
+
     with open(research_file, "r") as f:
         research_content = f.read()
-        
+
     prompt = f"""You are a planning agent for OSS Discovery Radar.
 Based on the provided research report, create an implementation plan for the issue.
 
@@ -211,15 +256,17 @@ Output ONLY the Markdown plan.
 
     try:
         response = run_hermes_oneshot(prompt, safe_mode=True)
-            
+
         with open(plan_file, "w") as f:
             f.write(response)
-            
+
         print(f"Plan saved to {plan_file}")
         log_event("hermes_plan", "success", f"Plan complete and saved to {plan_file}", issue_id=issue_number)
+        return True
     except Exception as e:
         print(f"Plan failed: {e}")
         log_event("hermes_plan", "failed", f"Plan failed: {str(e)}", issue_id=issue_number if 'issue_number' in locals() else None)
+        return False
 
 def implement_issue_with_hermes(worktree_path, context):
     print(f"Running Hermes implementation in {worktree_path}...")
@@ -227,9 +274,9 @@ def implement_issue_with_hermes(worktree_path, context):
         verify_local_provider()
     except Exception as e:
         raise RuntimeError(f"Local provider verification failed: {e}")
-        
+
     prompt = f"""You are an implementation agent. You are implementing ONE open-source issue in an isolated worktree.
-    
+
 CRITICAL SAFETY INSTRUCTIONS:
 - Do not modify the user's main checkout.
 - Make the smallest maintainable change that fully addresses the issue.
@@ -250,7 +297,7 @@ If you don't have tools to apply changes, output the full file modifications or 
 
 def repair_issue_with_hermes(worktree_path, context, failure_logs):
     print(f"Running Hermes repair loop in {worktree_path}...")
-    
+
     prompt = f"""You are a repair agent. The previous implementation for the issue failed validation.
 
 CONTEXT:
@@ -261,6 +308,6 @@ FAILURE LOGS:
 
 Please fix the implementation locally. Make the smallest maintainable change to pass the tests. Explain your assumptions.
 """
-    
+
     response = run_hermes_oneshot(prompt, cwd=str(worktree_path), safe_mode=True)
     return response
