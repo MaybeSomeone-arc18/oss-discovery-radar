@@ -8,6 +8,7 @@ from src.workspace_manager import create_worktree, cleanup_worktree, WORKSPACES_
 from src.hermes_agent import get_issue_context, get_reports_dir, implement_issue_with_hermes, repair_issue_with_hermes, run_hermes_oneshot
 from src.sandbox_runner import discover_and_run_tests
 from src.opportunity_manager import transition_status
+from src.autonomous_guard import get_hermes_execution_plan
 
 def get_agent_config():
     config_path = Path("config/agent.yaml")
@@ -171,6 +172,11 @@ def implement(issue_id):
         print(f"Safeguard error: Could not verify issue against GitHub: {e}")
         return False, None, ""
 
+    execution_ok, selected_model, execution_reason = get_hermes_execution_plan()
+    if not execution_ok:
+        print(f"Implementation deferred: {execution_reason}")
+        return False, None, ""
+
     reports_dir = get_reports_dir(org, repo, issue_id)
     plan_file = reports_dir / "plan.md"
     if not plan_file.exists():
@@ -207,7 +213,11 @@ def implement(issue_id):
     context = f"Issue Title: {issue['title']}\nBody: {issue['body_preview']}\n\nPLAN:\n{plan_content}"
 
     try:
-        implement_issue_with_hermes(worktree_path, context)
+        implement_issue_with_hermes(
+            worktree_path,
+            context,
+            model=selected_model,
+        )
         print("Hermes applied initial implementation.")
     except Exception as e:
         print(f"Implementation error: {e}")
@@ -248,7 +258,12 @@ def implement(issue_id):
             print("Tests failed. Triggering repair loop...")
             failure_logs = json.dumps(test_results, indent=2)
             try:
-                repair_issue_with_hermes(worktree_path, context, failure_logs)
+                repair_issue_with_hermes(
+                    worktree_path,
+                    context,
+                    failure_logs,
+                    model=selected_model,
+                )
             except Exception as e:
                 print(f"Repair error: {e}")
                 break

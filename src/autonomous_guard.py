@@ -1,18 +1,40 @@
-from src.hermes_agent import verify_local_provider, get_issue_context
-from src.resource_manager import check_resources_for_hermes
+from src.hermes_agent import (
+    verify_local_provider,
+    get_issue_context,
+    list_local_models,
+    select_local_model,
+)
+from src.resource_manager import check_resources_for_hermes, get_available_memory_mb
 
 
-def validate_hermes_execution():
+def get_hermes_execution_plan():
     try:
         verify_local_provider()
     except Exception as exc:
-        return False, f"Hermes unavailable: {exc}"
+        return False, None, f"Hermes unavailable: {exc}"
 
     resources_ok, resource_msg = check_resources_for_hermes()
-    if not resources_ok:
-        return False, resource_msg
 
-    return True, "Hermes execution validated."
+    if resources_ok:
+        return True, "qwen3.5:9b", "Hermes execution validated with qwen3.5:9b."
+
+    try:
+        selected_model = select_local_model(
+            get_available_memory_mb(),
+            list_local_models(),
+        )
+    except Exception as exc:
+        return False, None, f"Hermes model selection failed: {exc}"
+
+    if selected_model == "llama3.2:3b":
+        return True, "llama3.2:3b", "Hermes execution validated with llama3.2:3b."
+
+    return False, None, resource_msg
+
+
+def validate_hermes_execution():
+    ok, _model, reason = get_hermes_execution_plan()
+    return ok, reason
 
 
 def validate_autonomous_run(issue_id: int):
