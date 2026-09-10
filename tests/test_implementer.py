@@ -21,6 +21,14 @@ def setup_test_db():
         VALUES 
         ('http://test/999', 'test-org/test-repo', 'test-org', 999, 'Issue 999', 'OPEN', 'PLANNED')
         ''')
+        conn.execute(
+            """
+            UPDATE issues
+            SET communication_status = 'APPROVED',
+                communication_approved_at = CURRENT_TIMESTAMP
+            WHERE url = 'http://test/999'
+            """
+        )
         conn.commit()
     yield
 
@@ -209,3 +217,134 @@ def test_implementation_marks_in_progress_before_hermes(
     implement(999)
 
     assert observed_states == ["IN_PROGRESS"]
+
+
+def test_implement_blocks_without_communication_approval(monkeypatch):
+    import src.implementer as implementer
+
+    issue_url = "http://test/999"
+
+    monkeypatch.setattr(
+        implementer,
+        "get_issue_context_by_url",
+        lambda url: {
+            "url": issue_url,
+            "issue_number": 999,
+            "org_slug": "test",
+            "repo_name": "test/repo",
+            "title": "Test issue",
+            "body_preview": "Test body",
+        },
+    )
+    monkeypatch.setattr(
+        implementer.requests,
+        "get",
+        lambda *args, **kwargs: type(
+            "Response",
+            (),
+            {"status_code": 200, "json": lambda self: {"title": "Test issue"}},
+        )(),
+    )
+    monkeypatch.setattr(
+        implementer,
+        "get_hermes_execution_plan",
+        lambda: (True, "llama3.2:3b", "validated"),
+    )
+    monkeypatch.setattr(
+        implementer,
+        "get_reports_dir",
+        lambda *args: __import__("pathlib").Path("/tmp/nonexistent-radar-test"),
+    )
+    monkeypatch.setattr(
+        "src.opportunity_manager.get_communication_state",
+        lambda url: {
+            "communication_status": "REVIEW_REQUIRED",
+            "communication_recommendation": "Ask maintainer first.",
+            "communication_reason": "Intent unclear.",
+            "communication_approved_at": None,
+        },
+    )
+    monkeypatch.setattr(
+        "src.opportunity_manager.communication_allows_implementation",
+        lambda url: False,
+    )
+
+    success, test_results, diff_stat = implementer.implement(issue_url)
+
+    assert success is False
+    assert test_results is None
+    assert diff_stat == ""
+
+
+def test_implement_allows_approved_communication(monkeypatch, tmp_path):
+    import src.implementer as implementer
+
+    issue_url = "http://test/999"
+
+    monkeypatch.setattr(
+        implementer,
+        "get_issue_context_by_url",
+        lambda url: {
+            "url": issue_url,
+            "issue_number": 999,
+            "org_slug": "test",
+            "repo_name": "test/repo",
+            "title": "Test issue",
+            "body_preview": "Test body",
+        },
+    )
+    monkeypatch.setattr(
+        implementer.requests,
+        "get",
+        lambda *args, **kwargs: type(
+            "Response",
+            (),
+            {"status_code": 200, "json": lambda self: {"title": "Test issue"}},
+        )(),
+    )
+    monkeypatch.setattr(
+        implementer,
+        "get_hermes_execution_plan",
+        lambda: (True, "llama3.2:3b", "validated"),
+    )
+    plan_dir = tmp_path / "reports"
+    plan_dir.mkdir()
+    (plan_dir / "plan.md").write_text("PLAN")
+    monkeypatch.setattr(
+        implementer,
+        "get_reports_dir",
+        lambda *args: plan_dir,
+    )
+    monkeypatch.setattr(
+        "src.opportunity_manager.communication_allows_implementation",
+        lambda url: True,
+    )
+    worktree = tmp_path / "worktree"
+    worktree.mkdir()
+
+    monkeypatch.setattr(
+        implementer,
+        "create_worktree",
+        lambda *args: worktree,
+    )
+    monkeypatch.setattr(
+        implementer,
+        "transition_status",
+        lambda *args, **kwargs: None,
+    )
+    monkeypatch.setattr(
+        implementer,
+        "implement_issue_with_hermes",
+        lambda *args, **kwargs: "implemented",
+    )
+    monkeypatch.setattr(
+        implementer,
+        "check_diff_guardrails",
+        lambda *args: (False, "stop test before execution"),
+    )
+
+    success, test_results, diff_stat = implementer.implement(issue_url)
+
+    assert success is False
+    assert test_results is None
+    assert diff_stat == ""

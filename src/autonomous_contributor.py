@@ -2,6 +2,8 @@ from pathlib import Path
 
 from src.hermes_agent import research, plan, get_issue_context, get_issue_context_by_url, get_reports_dir
 from src.implementer import implement
+from src.communication_gate import generate_communication_recommendation
+from src.opportunity_manager import communication_allows_implementation, get_communication_state
 from src.autonomous_guard import get_hermes_execution_plan, validate_autonomous_run_by_url
 
 
@@ -25,6 +27,16 @@ def _run_pipeline(issue_id_or_url) -> tuple:
     research_file = reports_dir / "research.md"
     if not research_file.exists():
         raise RuntimeError("Research phase reported success but did not produce research.md.")
+
+    communication = generate_communication_recommendation(issue["url"])
+    communication_state = get_communication_state(issue["url"])
+
+    if not communication_allows_implementation(issue["url"]):
+        status = communication_state["communication_status"] if communication_state else "UNKNOWN"
+        raise RuntimeError(
+            f"Communication gate blocked implementation: status={status}. "
+            "Human review/approval is required before planning or implementation."
+        )
 
     if not plan(issue_id_or_url):
         raise RuntimeError("Plan phase failed.")

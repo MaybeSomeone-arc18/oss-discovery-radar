@@ -231,13 +231,25 @@ def process_due_hermes_retries(limit=10):
                     }
                 )
             else:
-                schedule_hermes_retry(issue_url)
-                results.append(
-                    {
-                        "url": issue_url,
-                        "result": "deferred",
-                    }
-                )
+                from src.opportunity_manager import get_communication_state
+
+                communication_state = get_communication_state(issue_url)
+                if communication_state and communication_state["communication_status"] == "REVIEW_REQUIRED":
+                    clear_hermes_retry(issue_url)
+                    results.append(
+                        {
+                            "url": issue_url,
+                            "result": "awaiting_human_communication",
+                        }
+                    )
+                else:
+                    schedule_hermes_retry(issue_url)
+                    results.append(
+                        {
+                            "url": issue_url,
+                            "result": "deferred",
+                        }
+                    )
         except Exception as exc:
             schedule_hermes_retry(issue_url)
             results.append(

@@ -45,6 +45,78 @@ def transition_status(issue_url, new_status, reason=None, notes=None, difficulty
         cursor.execute(query, params)
         conn.commit()
 
+def set_communication_recommendation(issue_url, recommendation, reason):
+    with get_connection() as conn:
+        conn.execute(
+            """
+            UPDATE issues
+            SET communication_status = 'REVIEW_REQUIRED',
+                communication_recommendation = ?,
+                communication_reason = ?,
+                communication_approved_at = NULL
+            WHERE url = ?
+            """,
+            (recommendation, reason, issue_url),
+        )
+        conn.commit()
+
+
+def get_communication_state(issue_url):
+    with get_connection() as conn:
+        cursor = conn.execute(
+            """
+            SELECT communication_status,
+                   communication_recommendation,
+                   communication_reason,
+                   communication_approved_at
+            FROM issues
+            WHERE url = ?
+            """,
+            (issue_url,),
+        )
+        row = cursor.fetchone()
+        if not row:
+            return None
+
+        columns = [col[0] for col in cursor.description]
+        return dict(zip(columns, row))
+
+
+def approve_communication(issue_url):
+    with get_connection() as conn:
+        cursor = conn.execute(
+            """
+            UPDATE issues
+            SET communication_status = 'APPROVED',
+                communication_approved_at = CURRENT_TIMESTAMP
+            WHERE url = ?
+            """,
+            (issue_url,),
+        )
+        conn.commit()
+        return cursor.rowcount == 1
+
+
+def reject_communication(issue_url, reason=None):
+    with get_connection() as conn:
+        cursor = conn.execute(
+            """
+            UPDATE issues
+            SET communication_status = 'REJECTED',
+                communication_reason = COALESCE(?, communication_reason),
+                communication_approved_at = NULL
+            WHERE url = ?
+            """,
+            (reason, issue_url),
+        )
+        conn.commit()
+        return cursor.rowcount == 1
+
+
+def communication_allows_implementation(issue_url):
+    state = get_communication_state(issue_url)
+    return bool(state and state["communication_status"] in {"APPROVED", "NOT_REQUIRED"})
+
 def generate_daily_shortlist(limit=10):
     with get_connection() as conn:
         cursor = conn.cursor()

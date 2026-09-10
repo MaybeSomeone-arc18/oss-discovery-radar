@@ -5,7 +5,7 @@ import subprocess
 import yaml
 from pathlib import Path
 from src.workspace_manager import create_worktree, cleanup_worktree, WORKSPACES_ROOT
-from src.hermes_agent import get_issue_context, get_reports_dir, implement_issue_with_hermes, repair_issue_with_hermes, run_hermes_oneshot
+from src.hermes_agent import get_issue_context, get_issue_context_by_url, get_reports_dir, implement_issue_with_hermes, repair_issue_with_hermes, run_hermes_oneshot
 from src.sandbox_runner import discover_and_run_tests
 from src.opportunity_manager import transition_status
 from src.autonomous_guard import get_hermes_execution_plan
@@ -147,8 +147,6 @@ def is_environment_failure(test_results):
 
 
 def implement(issue_id_or_url):
-    from src.hermes_agent import get_issue_context_by_url
-
     if isinstance(issue_id_or_url, str) and issue_id_or_url.startswith("http"):
         issue = get_issue_context_by_url(issue_id_or_url)
     else:
@@ -196,6 +194,24 @@ def implement(issue_id_or_url):
 
     with open(plan_file, "r") as f:
         plan_content = f.read()
+
+    from src.opportunity_manager import (
+        communication_allows_implementation,
+        get_communication_state,
+    )
+
+    if not communication_allows_implementation(issue["url"]):
+        communication_state = get_communication_state(issue["url"])
+        status = (
+            communication_state["communication_status"]
+            if communication_state
+            else "UNKNOWN"
+        )
+        print(
+            f"Implementation blocked by communication gate: "
+            f"status={status}. Human approval is required."
+        )
+        return False, None, ""
 
     worktree_path = create_worktree(org, repo, issue_id)
     transition_status(issue["url"], "IN_PROGRESS")

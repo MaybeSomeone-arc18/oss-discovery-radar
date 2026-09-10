@@ -180,3 +180,54 @@ def test_hermes_retry_schedule_not_installed(monkeypatch):
     monkeypatch.setattr("src.scheduler.get_hermes_retry_plist_path", lambda: path)
 
     assert "not installed" in hermes_retry_schedule_status()
+
+def test_process_due_hermes_retries_stops_for_human_communication(monkeypatch):
+    from src.scheduler import process_due_hermes_retries
+
+    url = "https://github.com/example/repo/issues/27"
+
+    rows = [
+        {
+            "issue_number": 27,
+            "url": url,
+            "repo_name": "example/repo",
+            "org_slug": "example",
+            "lifecycle_status": "RESEARCHED",
+            "hermes_retry_at": "2026-09-10 09:00:00",
+        }
+    ]
+
+    cleared = []
+    scheduled = []
+
+    monkeypatch.setattr(
+        "src.opportunity_manager.get_due_hermes_retries",
+        lambda limit=10: rows,
+    )
+    monkeypatch.setattr(
+        "src.autonomous_contributor.run_autonomous_by_url",
+        lambda issue_url: None,
+    )
+    monkeypatch.setattr(
+        "src.opportunity_manager.get_communication_state",
+        lambda issue_url: {"communication_status": "REVIEW_REQUIRED"},
+    )
+    monkeypatch.setattr(
+        "src.opportunity_manager.clear_hermes_retry",
+        lambda issue_url: cleared.append(issue_url),
+    )
+    monkeypatch.setattr(
+        "src.opportunity_manager.schedule_hermes_retry",
+        lambda issue_url: scheduled.append(issue_url),
+    )
+
+    result = process_due_hermes_retries()
+
+    assert cleared == [url]
+    assert scheduled == []
+    assert result == [
+        {
+            "url": url,
+            "result": "awaiting_human_communication",
+        }
+    ]
