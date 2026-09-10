@@ -118,7 +118,7 @@ def test_successful_implementation(monkeypatch, tmp_path):
     assert captured["model"] == "llama3.2:3b"
 
     from src.opportunity_manager import get_history
-    hist = get_history(999)
+    hist = get_history("http://test/999")
     assert hist["lifecycle_status"] == "IMPLEMENTED_LOCAL"
 
 
@@ -155,7 +155,7 @@ def test_failed_implementation_repair_loop(mock_open, mock_exists, mock_gen_repo
     
     # Should end in failed state
     from src.opportunity_manager import get_history
-    hist = get_history(999)
+    hist = get_history("http://test/999")
     assert hist['lifecycle_status'] == 'IMPLEMENTATION_FAILED'
 
 
@@ -196,12 +196,12 @@ def test_implementation_marks_in_progress_before_hermes(
     mock_plan.return_value = (True, "llama3.2:3b", "validated")
     from src.opportunity_manager import get_history
 
-    assert get_history(999)["lifecycle_status"] == "PLANNED"
+    assert get_history("http://test/999")["lifecycle_status"] == "PLANNED"
 
     observed_states = []
 
     def observe_lifecycle(*args, **kwargs):
-        observed_states.append(get_history(999)["lifecycle_status"])
+        observed_states.append(get_history("http://test/999")["lifecycle_status"])
         return "mock implementation"
 
     mock_hermes.side_effect = observe_lifecycle

@@ -253,6 +253,8 @@ def init_db():
         # Anti-spam & Personal Learning
         if 'cooldown_until' not in issue_columns:
             cursor.execute("ALTER TABLE issues ADD COLUMN cooldown_until TIMESTAMP")
+        if 'hermes_retry_at' not in issue_columns:
+            cursor.execute("ALTER TABLE issues ADD COLUMN hermes_retry_at TIMESTAMP")
         if 'user_difficulty' not in issue_columns:
             cursor.execute("ALTER TABLE issues ADD COLUMN user_difficulty TEXT")
         if 'user_notes' not in issue_columns:

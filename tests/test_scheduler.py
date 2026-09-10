@@ -59,3 +59,124 @@ def test_schedule_status_loaded(mock_run, mock_get_plist):
     
     status = schedule_status()
     assert "Installed and loaded" in status
+
+
+def test_process_due_hermes_retries_clears_success(monkeypatch):
+    from src.scheduler import process_due_hermes_retries
+
+    url = "https://github.com/example/repo/issues/25"
+
+    rows = [
+        {
+            "issue_number": 25,
+            "url": url,
+            "repo_name": "example/repo",
+            "org_slug": "example",
+            "lifecycle_status": "PLANNED",
+            "hermes_retry_at": "2026-09-10 09:00:00",
+        }
+    ]
+
+    cleared = []
+    calls = []
+
+    monkeypatch.setattr(
+        "src.opportunity_manager.get_due_hermes_retries",
+        lambda limit=10: rows,
+    )
+    monkeypatch.setattr(
+        "src.autonomous_contributor.run_autonomous_by_url",
+        lambda issue_url: calls.append(issue_url) or "/tmp/package",
+    )
+    monkeypatch.setattr(
+        "src.opportunity_manager.clear_hermes_retry",
+        lambda issue_url: cleared.append(issue_url),
+    )
+
+    result = process_due_hermes_retries()
+
+    assert calls == [url]
+    assert cleared == [url]
+    assert result == [
+        {
+            "url": url,
+            "result": "success",
+            "package": "/tmp/package",
+        }
+    ]
+
+
+def test_process_due_hermes_retries_reschedules_when_deferred(monkeypatch):
+    from src.scheduler import process_due_hermes_retries
+
+    url = "https://github.com/example/repo/issues/26"
+
+    rows = [
+        {
+            "issue_number": 26,
+            "url": url,
+            "repo_name": "example/repo",
+            "org_slug": "example",
+            "lifecycle_status": "PLANNED",
+            "hermes_retry_at": "2026-09-10 09:00:00",
+        }
+    ]
+
+    scheduled = []
+    cleared = []
+
+    monkeypatch.setattr(
+        "src.opportunity_manager.get_due_hermes_retries",
+        lambda limit=10: rows,
+    )
+    monkeypatch.setattr(
+        "src.autonomous_contributor.run_autonomous_by_url",
+        lambda issue_url: None,
+    )
+    monkeypatch.setattr(
+        "src.opportunity_manager.schedule_hermes_retry",
+        lambda issue_url: scheduled.append(issue_url),
+    )
+    monkeypatch.setattr(
+        "src.opportunity_manager.clear_hermes_retry",
+        lambda issue_url: cleared.append(issue_url),
+    )
+
+    result = process_due_hermes_retries()
+
+    assert scheduled == [url]
+    assert cleared == []
+    assert result == [
+        {
+            "url": url,
+            "result": "deferred",
+        }
+    ]
+
+
+def test_hermes_retry_schedule_status_loaded(monkeypatch):
+    from src.scheduler import hermes_retry_schedule_status
+
+    path = MagicMock()
+    path.exists.return_value = True
+
+    monkeypatch.setattr("src.scheduler.get_hermes_retry_plist_path", lambda: path)
+    monkeypatch.setattr(
+        "src.scheduler.subprocess.run",
+        lambda *args, **kwargs: MagicMock(
+            stdout="123 0 com.oss.discovery.radar.hermes-retries\n"
+        ),
+    )
+
+    assert "installed and loaded" in hermes_retry_schedule_status()
+
+
+def test_hermes_retry_schedule_not_installed(monkeypatch):
+    from src.scheduler import hermes_retry_schedule_status
+
+    path = MagicMock()
+    path.exists.return_value = False
+
+    monkeypatch.setattr("src.scheduler.get_hermes_retry_plist_path", lambda: path)
+
+    assert "not installed" in hermes_retry_schedule_status()

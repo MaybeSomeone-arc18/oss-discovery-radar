@@ -781,6 +781,26 @@ def main():
     # scheduler commands
     parser_run_now = subparsers.add_parser("run-now", help="Run the normal Radar daily update immediately")
     parser_sched_status = subparsers.add_parser("schedule-status", help="Check the status of the launchd schedule")
+    subparsers.add_parser("hermes-retries", help="Process due resource-deferred Hermes retries")
+    parser_hermes_retry_install = subparsers.add_parser(
+        "hermes-retry-schedule-install",
+        help="Install the periodic Hermes retry launchd schedule",
+    )
+    parser_hermes_retry_install.add_argument(
+        "--interval",
+        type=int,
+        default=30,
+        help="Retry check interval in minutes",
+    )
+
+    subparsers.add_parser(
+        "hermes-retry-schedule-status",
+        help="Check the Hermes retry launchd schedule",
+    )
+    subparsers.add_parser(
+        "hermes-retry-schedule-remove",
+        help="Remove the Hermes retry launchd schedule",
+    )
     
     parser_sched_inst = subparsers.add_parser("schedule-install", help="Install the daily schedule")
     parser_sched_inst.add_argument("--hour", type=int, default=2, help="Hour to run (0-23)")
@@ -868,6 +888,25 @@ def main():
         cmd_run_now()
     elif args.command == "schedule-status":
         cmd_schedule_status()
+    elif args.command == "hermes-retries":
+        from src.scheduler import process_due_hermes_retries
+        results = process_due_hermes_retries()
+        print(f"Processed {len(results)} due Hermes retries.")
+        for result in results:
+            print(result)
+    elif args.command == "hermes-retry-schedule-install":
+        from src.scheduler import install_hermes_retry_schedule
+        success, msg = install_hermes_retry_schedule(args.interval)
+        print(msg)
+
+    elif args.command == "hermes-retry-schedule-status":
+        from src.scheduler import hermes_retry_schedule_status
+        print(hermes_retry_schedule_status())
+
+    elif args.command == "hermes-retry-schedule-remove":
+        from src.scheduler import remove_hermes_retry_schedule
+        success, msg = remove_hermes_retry_schedule()
+        print(msg)
     elif args.command == "schedule-install":
         cmd_schedule_install(args.hour, args.minute)
     elif args.command == "schedule-remove":

@@ -1,33 +1,39 @@
 from pathlib import Path
 
-from src.hermes_agent import research, plan, get_issue_context, get_reports_dir
+from src.hermes_agent import research, plan, get_issue_context, get_issue_context_by_url, get_reports_dir
 from src.implementer import implement
+from src.autonomous_guard import get_hermes_execution_plan, validate_autonomous_run_by_url
 
 
-def _run_pipeline(issue_id: int) -> tuple:
-    issue = get_issue_context(issue_id)
+def _run_pipeline(issue_id_or_url) -> tuple:
+    if isinstance(issue_id_or_url, str) and issue_id_or_url.startswith("http"):
+        issue = get_issue_context_by_url(issue_id_or_url)
+    else:
+        issue = get_issue_context(issue_id_or_url)
+
     if not issue:
-        raise RuntimeError(f"Issue {issue_id} not found.")
+        raise RuntimeError(f"Issue {issue_id_or_url} not found.")
 
+    issue_id = issue["issue_number"]
     org = issue["org_slug"]
     repo = issue["repo_name"].split("/")[1]
     reports_dir = get_reports_dir(org, repo, issue_id)
 
-    if not research(issue_id):
+    if not research(issue_id_or_url):
         raise RuntimeError("Research phase failed.")
 
     research_file = reports_dir / "research.md"
     if not research_file.exists():
         raise RuntimeError("Research phase reported success but did not produce research.md.")
 
-    if not plan(issue_id):
+    if not plan(issue_id_or_url):
         raise RuntimeError("Plan phase failed.")
 
     plan_file = reports_dir / "plan.md"
     if not plan_file.exists():
         raise RuntimeError("Plan phase reported success but did not produce plan.md.")
 
-    success, test_results, diff_stat = implement(issue_id)
+    success, test_results, diff_stat = implement(issue_id_or_url)
 
     summary_file = reports_dir / "summary.md"
     if not summary_file.exists():
@@ -106,3 +112,78 @@ def run_best_autonomous():
     )
 
     return run_autonomous(issue_id)
+
+
+def run_autonomous_by_url(issue_url: str) -> Path:
+    issue = get_issue_context_by_url(issue_url)
+    if not issue:
+        log_event(
+            "autonomous_retry",
+            "skipped",
+            "Issue URL not found.",
+        )
+        print(f"Autonomous retry skipped: issue URL not found: {issue_url}")
+        return None
+
+    issue_id = issue["issue_number"]
+
+    valid, validation_reason = validate_autonomous_run_by_url(issue_url)
+    if not valid:
+        log_event(
+            "autonomous_retry",
+            "skipped" if "READY_NOW" not in validation_reason else "deferred",
+            validation_reason,
+            issue_id=issue_id,
+        )
+        print(f"Autonomous retry skipped/deferred: {validation_reason}")
+        return None
+
+    execution_ok, selected_model, execution_reason = get_hermes_execution_plan()
+    if not execution_ok:
+        log_event(
+            "autonomous_retry",
+            "deferred",
+            execution_reason,
+            issue_id=issue_id,
+        )
+        print(f"Autonomous retry deferred: {execution_reason}")
+        return None
+
+    log_event(
+        "autonomous_retry",
+        "started",
+        f"Retrying autonomous contribution with {selected_model}",
+        issue_id=issue_id,
+    )
+
+    try:
+        summary_file, success, test_results, diff_stat = _run_pipeline(issue_url)
+
+        org = issue["org_slug"]
+        repo = issue["repo_name"].split("/")[1]
+        reports_dir = get_reports_dir(org, repo, issue_id)
+
+        package = generate_contribution_package(
+            reports_dir,
+            issue_id,
+            success=success,
+            test_results=test_results,
+            diff_stat=diff_stat,
+        )
+
+        log_event(
+            "autonomous_retry",
+            "success",
+            f"Autonomous retry completed: {package}",
+            issue_id=issue_id,
+        )
+        return package
+
+    except Exception as exc:
+        log_event(
+            "autonomous_retry",
+            "failed",
+            str(exc),
+            issue_id=issue_id,
+        )
+        raise

@@ -34,6 +34,22 @@ def list_local_models():
         )
 
 
+def select_local_model(available_memory_mb, models=None):
+    """Select the strongest installed local model that fits the memory budget."""
+    if models is None:
+        models = list_local_models()
+
+    model_names = {model.get("name") for model in models}
+
+    if "qwen3.5:9b" in model_names and available_memory_mb >= 8192:
+        return "qwen3.5:9b"
+
+    if "llama3.2:3b" in model_names and available_memory_mb >= 3072:
+        return "llama3.2:3b"
+
+    return None
+
+
 def verify_local_provider():
     config_path = os.path.expanduser("~/.hermes/config.yaml")
     if not os.path.exists(config_path):
@@ -94,8 +110,10 @@ def get_reports_dir(org, repo, issue_id):
     reports_dir.mkdir(parents=True, exist_ok=True)
     return reports_dir
 
-def run_hermes_oneshot(prompt, cwd=None, safe_mode=False):
+def run_hermes_oneshot(prompt, cwd=None, safe_mode=False, model=None):
     cmd = ["hermes", "-z", prompt]
+    if model:
+        cmd.extend(["--model", model])
     # Removed --safe-mode because it ignores ~/.hermes/config.yaml and disables custom_providers
     try:
         kwargs = {
@@ -146,10 +164,26 @@ def research(issue_id_or_url):
     from src.run_log import log_event
     print(f"Running Real Hermes Research for Issue {issue_id_or_url}...")
     try:
-        verify_local_provider()
+        from src.autonomous_guard import get_hermes_execution_plan
+
+        execution_ok, selected_model, execution_reason = get_hermes_execution_plan()
+        if not execution_ok:
+            print(f"Research deferred: {execution_reason}")
+            log_event(
+                "hermes_research",
+                "deferred",
+                execution_reason,
+                issue_id=issue_id_or_url if isinstance(issue_id_or_url, int) else None,
+            )
+            return False
     except Exception as e:
         print(f"Research failed: {e}")
-        log_event("hermes_research", "failed", f"Local provider verification failed: {e}", issue_id=issue_id_or_url if isinstance(issue_id_or_url, int) else None)
+        log_event(
+            "hermes_research",
+            "failed",
+            f"Execution preflight failed: {e}",
+            issue_id=issue_id_or_url if isinstance(issue_id_or_url, int) else None,
+        )
         return False
 
     issue = get_issue_context(issue_id_or_url)
@@ -208,7 +242,7 @@ Known AI Policy Constraints: No AI-generated code push without human review.
     prompt += "\nOutput ONLY the Markdown report."
 
     try:
-        response = run_hermes_oneshot(prompt, safe_mode=True)
+        response = run_hermes_oneshot(prompt, safe_mode=True, model=selected_model)
 
         with open(raw_file, "w") as f:
             f.write(response)
@@ -227,12 +261,27 @@ def plan(issue_id_or_url):
     from src.run_log import log_event
     print(f"Running Real Hermes Plan for Issue {issue_id_or_url}...")
     try:
-        verify_local_provider()
+        from src.autonomous_guard import get_hermes_execution_plan
+
+        execution_ok, selected_model, execution_reason = get_hermes_execution_plan()
+        if not execution_ok:
+            print(f"Plan deferred: {execution_reason}")
+            log_event(
+                "hermes_plan",
+                "deferred",
+                execution_reason,
+                issue_id=issue_id_or_url if isinstance(issue_id_or_url, int) else None,
+            )
+            return False
     except Exception as e:
         print(f"Plan failed: {e}")
-        log_event("hermes_plan", "failed", f"Local provider verification failed: {e}", issue_id=issue_id_or_url if isinstance(issue_id_or_url, int) else None)
+        log_event(
+            "hermes_plan",
+            "failed",
+            f"Execution preflight failed: {e}",
+            issue_id=issue_id_or_url if isinstance(issue_id_or_url, int) else None,
+        )
         return False
-
     issue = get_issue_context(issue_id_or_url)
     if not issue:
         print(f"Issue {issue_id_or_url} not found.")
@@ -279,7 +328,7 @@ Output ONLY the Markdown plan.
 """
 
     try:
-        response = run_hermes_oneshot(prompt, safe_mode=True)
+        response = run_hermes_oneshot(prompt, safe_mode=True, model=selected_model)
 
         with open(plan_file, "w") as f:
             f.write(response)
@@ -292,7 +341,7 @@ Output ONLY the Markdown plan.
         log_event("hermes_plan", "failed", f"Plan failed: {str(e)}", issue_id=issue_number if 'issue_number' in locals() else None)
         return False
 
-def implement_issue_with_hermes(worktree_path, context):
+def implement_issue_with_hermes(worktree_path, context, model=None):
     print(f"Running Hermes implementation in {worktree_path}...")
     try:
         verify_local_provider()
@@ -316,10 +365,10 @@ Please implement the change locally in the current directory and explain your as
 If you don't have tools to apply changes, output the full file modifications or patches so they can be reviewed.
 """
 
-    response = run_hermes_oneshot(prompt, cwd=str(worktree_path), safe_mode=True)
+    response = run_hermes_oneshot(prompt, cwd=str(worktree_path), safe_mode=True, model=model)
     return response
 
-def repair_issue_with_hermes(worktree_path, context, failure_logs):
+def repair_issue_with_hermes(worktree_path, context, failure_logs, model=None):
     print(f"Running Hermes repair loop in {worktree_path}...")
 
     prompt = f"""You are a repair agent. The previous implementation for the issue failed validation.
@@ -333,5 +382,5 @@ FAILURE LOGS:
 Please fix the implementation locally. Make the smallest maintainable change to pass the tests. Explain your assumptions.
 """
 
-    response = run_hermes_oneshot(prompt, cwd=str(worktree_path), safe_mode=True)
+    response = run_hermes_oneshot(prompt, cwd=str(worktree_path), safe_mode=True, model=model)
     return response

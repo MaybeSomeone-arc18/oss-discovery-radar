@@ -40,9 +40,7 @@ def transition_status(issue_url, new_status, reason=None, notes=None, difficulty
             params.append(skills)
             
         params.append(issue_url)
-        # We allow matching by exact URL or issue number.
-        query = f"UPDATE issues SET {', '.join(updates)} WHERE url = ? OR issue_number = ?"
-        params.append(issue_url if str(issue_url).isdigit() else None)
+        query = f"UPDATE issues SET {', '.join(updates)} WHERE url = ?"
         
         cursor.execute(query, params)
         conn.commit()
@@ -95,20 +93,32 @@ def _get_deterministic_recommendation(row):
 def get_history(issue_id):
     with get_connection() as conn:
         cursor = conn.cursor()
-        cursor.execute('''
-        SELECT url, repo_name, title, first_seen_at, last_seen_at, lifecycle_status, 
-               previous_score, current_score, score_delta, researched, planned, implemented, submitted, merged, 
-               dismissed, dismissal_reason, user_difficulty, user_notes, skills_learned
-        FROM issues WHERE url = ? OR issue_number = ?
-        ''', (issue_id, issue_id if str(issue_id).isdigit() else None))
-        
+
+        if isinstance(issue_id, str) and issue_id.startswith("http"):
+            query = """
+            SELECT url, repo_name, title, first_seen_at, last_seen_at, lifecycle_status,
+                   previous_score, current_score, score_delta, researched, planned, implemented, submitted, merged,
+                   dismissed, dismissal_reason, user_difficulty, user_notes, skills_learned
+            FROM issues WHERE url = ?
+            """
+            params = (issue_id,)
+        else:
+            query = """
+            SELECT url, repo_name, title, first_seen_at, last_seen_at, lifecycle_status,
+                   previous_score, current_score, score_delta, researched, planned, implemented, submitted, merged,
+                   dismissed, dismissal_reason, user_difficulty, user_notes, skills_learned
+            FROM issues WHERE issue_number = ? OR url LIKE ?
+            """
+            params = (issue_id, f"%/{issue_id}")
+
+        cursor.execute(query, params)
         row = cursor.fetchone()
+
         if not row:
             return None
-            
+
         cols = [c[0] for c in cursor.description]
         return dict(zip(cols, row))
-
 
 
 def get_changes_summary():
@@ -194,3 +204,40 @@ def run_daily_pipeline():
         print(f"Error scoring organizations: {e}")
         
     print("Pipeline finished.")
+
+
+def schedule_hermes_retry(issue_url, delay_minutes=30):
+    with get_connection() as conn:
+        conn.execute(
+            "UPDATE issues SET hermes_retry_at = datetime(CURRENT_TIMESTAMP, ?) WHERE url = ?",
+            (f"+{int(delay_minutes)} minutes", issue_url),
+        )
+        conn.commit()
+
+
+def clear_hermes_retry(issue_url):
+    with get_connection() as conn:
+        conn.execute(
+            "UPDATE issues SET hermes_retry_at = NULL WHERE url = ?",
+            (issue_url,),
+        )
+        conn.commit()
+
+
+def get_due_hermes_retries(limit=10):
+    with get_connection() as conn:
+        cursor = conn.execute(
+            """
+            SELECT issue_number, url, repo_name, org_slug, lifecycle_status, hermes_retry_at
+            FROM issues
+            WHERE hermes_retry_at IS NOT NULL
+              AND hermes_retry_at <= CURRENT_TIMESTAMP
+            ORDER BY hermes_retry_at ASC
+            LIMIT ?
+            """,
+            (int(limit),),
+        )
+        rows = cursor.fetchall()
+
+        columns = [col[0] for col in cursor.description]
+        return [dict(zip(columns, row)) for row in rows]

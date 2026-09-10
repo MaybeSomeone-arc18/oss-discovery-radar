@@ -77,3 +77,91 @@ def test_in_progress_does_not_mark_implemented():
 
     assert hist["lifecycle_status"] == "IN_PROGRESS"
     assert hist["implemented"] == 0
+
+
+def test_schedule_and_clear_hermes_retry(monkeypatch):
+    from src.opportunity_manager import schedule_hermes_retry, clear_hermes_retry
+
+    class FakeCursor:
+        def execute(self, query, params):
+            self.query = query
+            self.params = params
+
+    class FakeConnection:
+        def __init__(self):
+            self.cursor_obj = FakeCursor()
+            self.executed = []
+
+        def execute(self, query, params=()):
+            self.executed.append((query, params))
+
+        def commit(self):
+            pass
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            pass
+
+    conn = FakeConnection()
+    monkeypatch.setattr(
+        "src.opportunity_manager.get_connection",
+        lambda: conn,
+    )
+
+    issue_url = "https://github.com/test/repo/issues/25"
+
+    schedule_hermes_retry(issue_url, delay_minutes=30)
+
+    assert conn.executed[0][1] == ("+30 minutes", issue_url)
+    assert "WHERE url = ?" in conn.executed[0][0]
+
+    clear_hermes_retry(issue_url)
+
+    assert conn.executed[1][1] == (issue_url,)
+    assert "WHERE url = ?" in conn.executed[1][0]
+
+
+def test_get_due_hermes_retries_filters_and_orders(monkeypatch):
+    from src.opportunity_manager import get_due_hermes_retries
+
+    class FakeCursor:
+        description = [
+            ("issue_number",),
+            ("url",),
+            ("repo_name",),
+            ("org_slug",),
+            ("lifecycle_status",),
+            ("hermes_retry_at",),
+        ]
+
+        def fetchall(self):
+            return [
+                (2, "https://github.com/b/issues/2", "b", "org-b", "NEW", "2026-09-10 20:00:00"),
+                (1, "https://github.com/a/issues/1", "a", "org-a", "WATCHING", "2026-09-10 19:00:00"),
+            ]
+
+    class FakeConnection:
+        def execute(self, query, params=()):
+            assert "hermes_retry_at <= CURRENT_TIMESTAMP" in query
+            assert "ORDER BY hermes_retry_at ASC" in query
+            assert params == (10,)
+            return FakeCursor()
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            pass
+
+    monkeypatch.setattr(
+        "src.opportunity_manager.get_connection",
+        lambda: FakeConnection(),
+    )
+
+    rows = get_due_hermes_retries()
+
+    assert len(rows) == 2
+    assert rows[0]["url"] == "https://github.com/b/issues/2"
+    assert rows[1]["url"] == "https://github.com/a/issues/1"

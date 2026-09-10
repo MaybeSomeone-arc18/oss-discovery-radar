@@ -146,11 +146,19 @@ def is_environment_failure(test_results):
     return False
 
 
-def implement(issue_id):
-    issue = get_issue_context(issue_id)
+def implement(issue_id_or_url):
+    from src.hermes_agent import get_issue_context_by_url
+
+    if isinstance(issue_id_or_url, str) and issue_id_or_url.startswith("http"):
+        issue = get_issue_context_by_url(issue_id_or_url)
+    else:
+        issue = get_issue_context(issue_id_or_url)
+
     if not issue:
-        print(f"Issue {issue_id} not found.")
+        print(f"Issue {issue_id_or_url} not found.")
         return False, None, ""
+
+    issue_id = issue["issue_number"]
 
     org = issue['org_slug']
     repo = issue['repo_name'].split('/')[1]
@@ -190,7 +198,7 @@ def implement(issue_id):
         plan_content = f.read()
 
     worktree_path = create_worktree(org, repo, issue_id)
-    transition_status(issue_id, "IN_PROGRESS")
+    transition_status(issue["url"], "IN_PROGRESS")
     print(f"Isolated worktree ready at {worktree_path}.")
 
     # Record base commit
@@ -221,7 +229,7 @@ def implement(issue_id):
         print("Hermes applied initial implementation.")
     except Exception as e:
         print(f"Implementation error: {e}")
-        transition_status(issue_id, "IMPLEMENTATION_FAILED")
+        transition_status(issue["url"], "IMPLEMENTATION_FAILED")
         os.environ.update(original_environ)
         return False, None, ""
 
@@ -229,7 +237,7 @@ def implement(issue_id):
     passed_guardrails, guardrail_msg = check_diff_guardrails(worktree_path)
     if not passed_guardrails:
         print(f"Validation FAILED: {guardrail_msg}")
-        transition_status(issue_id, "IMPLEMENTATION_FAILED")
+        transition_status(issue["url"], "IMPLEMENTATION_FAILED")
         os.environ.update(original_environ)
         return False, None, ""
 
@@ -297,10 +305,10 @@ def implement(issue_id):
     os.environ.update(original_environ)
 
     if success:
-        transition_status(issue_id, "IMPLEMENTED_LOCAL")
+        transition_status(issue["url"], "IMPLEMENTED_LOCAL")
         print(f"Success! Marked {issue_id} as IMPLEMENTED_LOCAL.")
     else:
-        transition_status(issue_id, "IMPLEMENTATION_FAILED")
+        transition_status(issue["url"], "IMPLEMENTATION_FAILED")
         print(f"Validation failed. Marked {issue_id} as IMPLEMENTATION_FAILED.")
 
     return success, test_results, diff_stat

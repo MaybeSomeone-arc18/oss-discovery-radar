@@ -32,6 +32,33 @@ def get_hermes_execution_plan():
     return False, None, resource_msg
 
 
+def validate_autonomous_run_by_url(issue_url: str):
+    from src.hermes_agent import get_issue_context_by_url
+
+    issue = get_issue_context_by_url(issue_url)
+    if not issue:
+        return False, "Issue not found."
+
+    if issue.get("readiness_status") != "READY_NOW":
+        return False, f"Issue is not READY_NOW: {issue.get('readiness_status')}"
+
+    blocked = {
+        "BLOCKED",
+        "SOLVED",
+        "DUPLICATE",
+        "BLOCKED_STUDENT_WORK_REPO",
+        "BLOCKED_RELATED_PR",
+        "LIKELY_SOLVED",
+    }
+    if issue.get("eligibility_status") in blocked:
+        return False, f"Issue is ineligible: {issue.get('eligibility_status')}"
+
+    execution_ok, execution_reason = validate_hermes_execution()
+    if not execution_ok:
+        return False, execution_reason
+
+    return True, "Autonomous run validated."
+
 def validate_hermes_execution():
     ok, _model, reason = get_hermes_execution_plan()
     return ok, reason
