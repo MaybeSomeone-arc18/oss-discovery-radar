@@ -118,7 +118,8 @@ def test_validate_hermes_execution_allows_3b_fallback(monkeypatch):
     assert "llama3.2:3b" in reason
 
 
-def test_get_hermes_execution_plan_selects_qwen(monkeypatch):
+def test_get_hermes_execution_plan_never_selects_qwen_even_with_resources(monkeypatch):
+    """Even when resource check passes and qwen is installed, 3B is returned, never 9B."""
     from src.autonomous_guard import get_hermes_execution_plan
 
     monkeypatch.setattr(
@@ -133,8 +134,9 @@ def test_get_hermes_execution_plan_selects_qwen(monkeypatch):
     ok, model, reason = get_hermes_execution_plan()
 
     assert ok is True
-    assert model == "qwen3.5:9b"
-    assert "qwen3.5:9b" in reason
+    assert model == "llama3.2:3b"
+    assert "llama3.2:3b" in reason
+    assert "qwen3.5:9b" not in model
 
 
 def test_get_hermes_execution_plan_selects_3b(monkeypatch):
@@ -195,3 +197,63 @@ def test_get_hermes_execution_plan_defers_when_no_model_fits(monkeypatch):
     assert ok is False
     assert model is None
     assert "Insufficient memory headroom" in reason
+
+
+@pytest.mark.parametrize("available_mb", [16384, 9000, 6000, 3072])
+def test_get_hermes_execution_plan_never_returns_qwen_at_any_memory(monkeypatch, available_mb):
+    """qwen3.5:9b must never be the returned model, regardless of available memory."""
+    from src.autonomous_guard import get_hermes_execution_plan
+
+    monkeypatch.setattr(
+        "src.autonomous_guard.verify_local_provider",
+        lambda: None,
+    )
+    monkeypatch.setattr(
+        "src.autonomous_guard.check_resources_for_hermes",
+        lambda: (False, "Insufficient memory headroom"),
+    )
+    monkeypatch.setattr(
+        "src.autonomous_guard.list_local_models",
+        lambda: [
+            {"name": "qwen3.5:9b", "size": 6594474711},
+            {"name": "llama3.2:3b", "size": 2019393189},
+        ],
+    )
+    monkeypatch.setattr(
+        "src.autonomous_guard.get_available_memory_mb",
+        lambda mb=available_mb: mb,
+    )
+
+    ok, model, _ = get_hermes_execution_plan()
+
+    assert model != "qwen3.5:9b", (
+        f"qwen3.5:9b must never be selected automatically (got model={model!r} at {available_mb}MB)"
+    )
+
+
+def test_insufficient_memory_returns_no_safe_model(monkeypatch):
+    """When memory is too low even for 3B, the plan must defer with no model."""
+    from src.autonomous_guard import get_hermes_execution_plan
+
+    monkeypatch.setattr(
+        "src.autonomous_guard.verify_local_provider",
+        lambda: None,
+    )
+    monkeypatch.setattr(
+        "src.autonomous_guard.check_resources_for_hermes",
+        lambda: (False, "Insufficient memory headroom"),
+    )
+    monkeypatch.setattr(
+        "src.autonomous_guard.list_local_models",
+        lambda: [{"name": "llama3.2:3b", "size": 2019393189}],
+    )
+    monkeypatch.setattr(
+        "src.autonomous_guard.get_available_memory_mb",
+        lambda: 2000,
+    )
+
+    ok, model, reason = get_hermes_execution_plan()
+
+    assert ok is False
+    assert model is None
+    assert "Insufficient memory" in reason

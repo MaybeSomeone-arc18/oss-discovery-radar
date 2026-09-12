@@ -16,7 +16,7 @@ def get_hermes_execution_plan():
     resources_ok, resource_msg = check_resources_for_hermes()
 
     if resources_ok:
-        return True, "qwen3.5:9b", "Hermes execution validated with qwen3.5:9b."
+        return True, "llama3.2:3b", "Hermes execution validated with llama3.2:3b."
 
     try:
         selected_model = select_local_model(

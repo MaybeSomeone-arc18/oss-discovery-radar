@@ -35,14 +35,15 @@ def list_local_models():
 
 
 def select_local_model(available_memory_mb, models=None):
-    """Select the strongest installed local model that fits the memory budget."""
+    """Select the default local model (llama3.2:3b) when it fits the memory budget.
+
+    qwen3.5:9b is intentionally never selected by the automated path under any
+    memory condition; it remains available only for explicit manual --model use.
+    """
     if models is None:
         models = list_local_models()
 
     model_names = {model.get("name") for model in models}
-
-    if "qwen3.5:9b" in model_names and available_memory_mb >= 8192:
-        return "qwen3.5:9b"
 
     if "llama3.2:3b" in model_names and available_memory_mb >= 3072:
         return "llama3.2:3b"
@@ -59,8 +60,8 @@ def verify_local_provider():
         config = yaml.safe_load(f)
 
     model_conf = config.get("model", {})
-    if model_conf.get("default") != "qwen3.5:9b":
-        raise RuntimeError(f"Safety Error: Hermes model is not qwen3.5:9b. Currently set to: {model_conf.get('default')}")
+    if model_conf.get("default") != "llama3.2:3b":
+        raise RuntimeError(f"Safety Error: Hermes model is not llama3.2:3b. Currently set to: {model_conf.get('default')}")
 
     provider = model_conf.get("provider", "")
     if provider not in ("custom", "local"):
@@ -136,7 +137,7 @@ def run_hermes_oneshot(prompt, cwd=None, safe_mode=False, model=None):
                 )
             if "model not found" in err or "not available" in err:
                 raise RuntimeError(
-                    f"Model unavailable. Make sure qwen3.5:9b is pulled.\nDetails: {result.stderr}"
+                    f"Model unavailable. Make sure llama3.2:3b is pulled.\nDetails: {result.stderr}"
                 )
             if "context length" in err or "context too small" in err:
                 raise RuntimeError(

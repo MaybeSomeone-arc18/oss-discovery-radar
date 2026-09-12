@@ -14,14 +14,14 @@ from src.hermes_agent import (
 def test_verify_local_provider_success():
     valid_yaml = """
 model:
-  default: qwen3.5:9b
+  default: llama3.2:3b
   provider: custom
 """
     with patch("os.path.exists", return_value=True):
         with patch("builtins.open", mock_open(read_data=valid_yaml)):
             with patch("requests.get") as mock_get:
                 mock_get.return_value.status_code = 200
-                mock_get.return_value.json.return_value = {"models": [{"name": "qwen3.5:9b"}]}
+                mock_get.return_value.json.return_value = {"models": [{"name": "llama3.2:3b"}]}
                 verify_local_provider()
                 mock_get.assert_called_once()
 
@@ -33,13 +33,13 @@ model:
 """
     with patch("os.path.exists", return_value=True):
         with patch("builtins.open", mock_open(read_data=invalid_yaml)):
-            with pytest.raises(RuntimeError, match="not qwen3.5:9b"):
+            with pytest.raises(RuntimeError, match="not llama3.2:3b"):
                 verify_local_provider()
 
 def test_verify_local_provider_wrong_provider():
     invalid_yaml = """
 model:
-  default: qwen3.5:9b
+  default: llama3.2:3b
   provider: openrouter
 """
     with patch("os.path.exists", return_value=True):
@@ -50,7 +50,7 @@ model:
 def test_verify_local_provider_unreachable():
     valid_yaml = """
 model:
-  default: qwen3.5:9b
+  default: llama3.2:3b
   provider: custom
 """
     with patch("os.path.exists", return_value=True):
@@ -62,7 +62,7 @@ model:
 def test_verify_local_provider_bad_status():
     valid_yaml = """
 model:
-  default: qwen3.5:9b
+  default: llama3.2:3b
   provider: custom
 """
     with patch("os.path.exists", return_value=True):
@@ -228,3 +228,86 @@ def test_list_local_models_unreachable(mock_get):
 
     with pytest.raises(OllamaUnavailableError, match="unreachable"):
         list_local_models()
+
+
+def test_select_local_model_never_selects_qwen_even_with_plenty_of_memory():
+    """qwen3.5:9b must never be auto-selected, even with plenty of memory."""
+    from src.hermes_agent import select_local_model
+
+    models = [
+        {"name": "qwen3.5:9b", "size": 6594474711},
+        {"name": "llama3.2:3b", "size": 2019393189},
+    ]
+
+    result = select_local_model(16384, models)
+
+    assert result == "llama3.2:3b"
+    assert result != "qwen3.5:9b"
+
+
+def test_select_local_model_selects_3b_when_memory_threshold_met():
+    """llama3.2:3b is selected whenever the configured memory threshold is met."""
+    from src.hermes_agent import select_local_model
+
+    models = [
+        {"name": "qwen3.5:9b", "size": 6594474711},
+        {"name": "llama3.2:3b", "size": 2019393189},
+    ]
+
+    assert select_local_model(6000, models) == "llama3.2:3b"
+    assert select_local_model(3072, models) == "llama3.2:3b"
+
+
+def test_select_local_model_defers_when_neither_fits():
+    from src.hermes_agent import select_local_model
+
+    models = [
+        {"name": "qwen3.5:9b", "size": 6594474711},
+        {"name": "llama3.2:3b", "size": 2019393189},
+    ]
+
+    assert select_local_model(2000, models) is None
+
+
+def test_select_local_model_uses_3b_when_qwen_is_not_installed():
+    from src.hermes_agent import select_local_model
+
+    models = [
+        {"name": "llama3.2:3b", "size": 2019393189},
+    ]
+
+    assert select_local_model(9000, models) == "llama3.2:3b"
+
+
+def test_select_local_model_defers_when_no_supported_model_is_installed():
+    from src.hermes_agent import select_local_model
+
+    models = [
+        {"name": "some-other-model", "size": 1000000000},
+    ]
+
+    assert select_local_model(9000, models) is None
+
+
+def test_implement_issue_with_hermes_passes_selected_model(monkeypatch, tmp_path):
+    from src.hermes_agent import implement_issue_with_hermes
+
+    captured = {}
+
+    def fake_run(prompt, **kwargs):
+        captured.update(kwargs)
+        return "implemented"
+
+    monkeypatch.setattr("src.hermes_agent.run_hermes_oneshot", fake_run)
+    monkeypatch.setattr("src.hermes_agent.verify_local_provider", lambda: None)
+
+    result = implement_issue_with_hermes(
+        tmp_path,
+        "Issue Title: Test\nPLAN:\nDo the thing",
+        model="llama3.2:3b",
+    )
+
+    assert result == "implemented"
+    assert captured["model"] == "llama3.2:3b"
+
+
