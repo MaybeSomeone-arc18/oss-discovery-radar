@@ -141,6 +141,17 @@ def init_db():
         
         # Issues
         
+        # Daily Runs - tracks manual daily pipeline executions
+        cursor.execute('''
+        CREATE TABLE IF NOT EXISTS daily_runs (
+            run_date TEXT PRIMARY KEY,
+            status TEXT NOT NULL,
+            started_at TIMESTAMP,
+            completed_at TIMESTAMP,
+            error_message TEXT
+        )
+        ''')
+        
         # Audit Logs
         cursor.execute('''
         CREATE TABLE IF NOT EXISTS audit_logs (
@@ -522,4 +533,54 @@ def update_repository_classification(repo_name, classification, eligibility, evi
                 upstream_confidence = ?
             WHERE name = ?
         ''', (classification, eligibility, evidence, upstream_repo, upstream_confidence, repo_name))
+        conn.commit()
+
+def get_daily_run_state(run_date):
+    """Return the daily_runs row for run_date, or None."""
+    with get_connection() as conn:
+        row = conn.execute(
+            "SELECT run_date, status, started_at, completed_at, error_message"
+            " FROM daily_runs WHERE run_date = ?",
+            (run_date,),
+        ).fetchone()
+        if not row:
+            return None
+        columns = ["run_date", "status", "started_at", "completed_at", "error_message"]
+        return dict(zip(columns, row))
+
+def record_daily_run_start(run_date):
+    """Mark today's daily run as RUNNING (resets any prior FAILED/STALE state)."""
+    with get_connection() as conn:
+        conn.execute(
+            """
+            INSERT INTO daily_runs (run_date, status, started_at, completed_at, error_message)
+            VALUES (?, 'RUNNING', CURRENT_TIMESTAMP, NULL, NULL)
+            ON CONFLICT(run_date) DO UPDATE SET
+                status = 'RUNNING',
+                started_at = CURRENT_TIMESTAMP,
+                completed_at = NULL,
+                error_message = NULL
+            """,
+            (run_date,),
+        )
+        conn.commit()
+
+def record_daily_run_complete(run_date):
+    """Mark today's daily run as COMPLETED."""
+    with get_connection() as conn:
+        conn.execute(
+            "UPDATE daily_runs SET status = 'COMPLETED', completed_at = CURRENT_TIMESTAMP"
+            " WHERE run_date = ?",
+            (run_date,),
+        )
+        conn.commit()
+
+def record_daily_run_failed(run_date, error_message=None):
+    """Mark today's daily run as FAILED so it can be retried."""
+    with get_connection() as conn:
+        conn.execute(
+            "UPDATE daily_runs SET status = 'FAILED', error_message = ?"
+            " WHERE run_date = ?",
+            (error_message, run_date),
+        )
         conn.commit()

@@ -619,7 +619,56 @@ def cmd_run_now():
     # We just run the daily run.
     print("Running normal Radar update work (No Hermes)...")
     cmd_daily_run()
-    
+
+def cmd_run_daily():
+    from datetime import datetime, timezone, timedelta
+    from src.database import (
+        init_db,
+        get_daily_run_state,
+        record_daily_run_start,
+        record_daily_run_complete,
+        record_daily_run_failed,
+    )
+
+    init_db()
+
+    today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    state = get_daily_run_state(today)
+
+    if state:
+        status = state["status"]
+        if status == "COMPLETED":
+            print(f"ALREADY_COMPLETED: Daily run for {today} already finished successfully.")
+            return
+        if status == "RUNNING":
+            # A run recorded as in-progress forever (e.g. killed process) must not
+            # permanently lock the day. Treat runs stuck for >2 hours as stale.
+            started_at = state.get("started_at")
+            if started_at:
+                try:
+                    started_dt = datetime.strptime(started_at, "%Y-%m-%d %H:%M:%S").replace(tzinfo=timezone.utc)
+                    if datetime.now(timezone.utc) - started_dt < timedelta(hours=2):
+                        print(f"RUNNING: Daily run for {today} is already in progress (started {started_at} UTC).")
+                        return
+                except ValueError:
+                    pass  # unparseable timestamp -> treat as stale, allow retry
+            else:
+                print(f"RUNNING: Daily run for {today} is already in progress.")
+                return
+        # FAILED (or stale RUNNING): allow retry below.
+
+    record_daily_run_start(today)
+    print(f"STARTED: Daily run for {today}.")
+
+    try:
+        cmd_daily_run()
+        record_daily_run_complete(today)
+        print(f"COMPLETED: Daily run for {today} finished successfully.")
+    except Exception as e:
+        record_daily_run_failed(today, str(e))
+        print(f"FAILED: Daily run for {today} failed: {e}")
+        raise
+
 def cmd_schedule_status():
     from src.scheduler import schedule_status
     print(schedule_status())
@@ -763,6 +812,8 @@ def main():
     subparsers.add_parser("daily", help="Print daily shortlist of opportunities")
     subparsers.add_parser("changes", help="Print summary of changes since last run")
     
+    subparsers.add_parser("run-daily", help="Run the daily Radar pipeline once manually (blocked once per calendar day)")
+    
     history_parser = subparsers.add_parser("history", help="Show history of an opportunity")
     history_parser.add_argument("id", help="Issue number or URL")
     
@@ -884,6 +935,8 @@ def main():
         cmd_digest()
     elif args.command == "daily-run":
         cmd_daily_run()
+    elif args.command == "run-daily":
+        cmd_run_daily()
     elif args.command == "run-now":
         cmd_run_now()
     elif args.command == "schedule-status":
