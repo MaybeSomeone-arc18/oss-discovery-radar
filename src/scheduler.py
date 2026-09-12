@@ -2,6 +2,12 @@ import os
 import subprocess
 from pathlib import Path
 
+# launchd jobs run with a minimal PATH (/usr/bin:/bin:/usr/sbin:/sbin) that
+# excludes Homebrew's /opt/homebrew/bin, where the `gh` CLI lives. Expose it so
+# src.config.get_github_token() can fall back to `gh auth token` (macOS
+# Keychain) without storing any token in the repository.
+LAUNCHD_PATH = "/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin"
+
 HERMES_RETRY_PLIST_TEMPLATE = """<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
     "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -17,6 +23,11 @@ HERMES_RETRY_PLIST_TEMPLATE = """<?xml version="1.0" encoding="UTF-8"?>
     </array>
     <key>WorkingDirectory</key>
     <string>{working_dir}</string>
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>PATH</key>
+        <string>{launchd_path}</string>
+    </dict>
     <key>StandardOutPath</key>
     <string>{log_dir}/hermes_retry.log</string>
     <key>StandardErrorPath</key>
@@ -45,6 +56,12 @@ PLIST_TEMPLATE = """<?xml version="1.0" encoding="UTF-8"?>
     
     <key>WorkingDirectory</key>
     <string>{working_dir}</string>
+    
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>PATH</key>
+        <string>{launchd_path}</string>
+    </dict>
     
     <key>StandardOutPath</key>
     <string>{log_dir}/radar.log</string>
@@ -92,6 +109,7 @@ def install_hermes_retry_schedule(interval_minutes=30):
         working_dir=working_dir,
         log_dir=log_dir,
         interval_seconds=int(interval_minutes) * 60,
+        launchd_path=LAUNCHD_PATH,
     )
 
     plist_path.parent.mkdir(parents=True, exist_ok=True)
@@ -166,7 +184,8 @@ def install_schedule(hour=2, minute=0):
         working_dir=working_dir,
         log_dir=log_dir,
         hour=hour,
-        minute=minute
+        minute=minute,
+        launchd_path=LAUNCHD_PATH,
     )
     
     # Ensure LaunchAgents dir exists

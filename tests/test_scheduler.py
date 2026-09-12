@@ -231,3 +231,46 @@ def test_process_due_hermes_retries_stops_for_human_communication(monkeypatch):
             "result": "awaiting_human_communication",
         }
     ]
+
+@patch('src.scheduler.get_plist_path')
+@patch('subprocess.run')
+@patch('builtins.open')
+def test_daily_plist_exposes_gh_on_launchd_path(mock_open, mock_run, mock_get_plist):
+    """The daily job's generated plist must add Homebrew's bin dir to launchd PATH."""
+    mock_get_plist.return_value = MagicMock()
+    mock_run.return_value = MagicMock(returncode=0)
+
+    ok, msg = install_schedule(9, 0)
+    assert ok is True
+
+    written = mock_open.return_value.__enter__.return_value.write.call_args[0][0]
+    assert "<key>EnvironmentVariables</key>" in written
+    assert "<key>PATH</key>" in written
+    assert "<string>/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>" in written
+
+
+def test_hermes_retry_plist_exposes_gh_on_launchd_path(monkeypatch):
+    """The Hermes retry job's generated plist must also add Homebrew's bin dir."""
+    from src.scheduler import install_hermes_retry_schedule
+
+    written = {}
+
+    def fake_write_text(content):
+        written["content"] = content
+
+    mock_path = MagicMock()
+    mock_path.write_text.side_effect = fake_write_text
+
+    monkeypatch.setattr("src.scheduler.get_hermes_retry_plist_path", lambda: mock_path)
+    monkeypatch.setattr(
+        "src.scheduler.subprocess.run",
+        lambda *args, **kwargs: MagicMock(returncode=0),
+    )
+
+    ok, msg = install_hermes_retry_schedule(interval_minutes=30)
+    assert ok is True
+
+    content = written["content"]
+    assert "<key>EnvironmentVariables</key>" in content
+    assert "<key>PATH</key>" in content
+    assert "<string>/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>" in content
