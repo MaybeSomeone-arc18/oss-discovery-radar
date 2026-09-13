@@ -62,7 +62,7 @@ def test_retry_uses_exact_url(monkeypatch):
         lambda *args, **kwargs: Path("/tmp/package"),
     )
 
-    def record_pipeline(issue_url):
+    def record_pipeline(issue_url, **kwargs):
         calls.append(issue_url)
         return (
             Path("/tmp/summary.md"),
@@ -182,3 +182,59 @@ def test_pipeline_proceeds_when_communication_is_not_required(monkeypatch, tmp_p
 
     assert result[0] == tmp_path / "summary.md"
     assert result[1] is True
+
+
+def test_start_work_reuses_existing_path_without_regeneration(monkeypatch):
+    """Dashboard Start Work must invoke the EXISTING autonomous execution
+    path (run_autonomous_by_url) and must NOT regenerate the communication
+    recommendation: the human has already approved and marked it sent."""
+    url = "https://github.com/example/repo/issues/25"
+    seen = {}
+
+    monkeypatch.setattr(
+        "src.autonomous_contributor.get_issue_context_by_url",
+        lambda issue_url: {
+            "issue_number": 25,
+            "org_slug": "example",
+            "repo_name": "example/repo",
+        },
+    )
+    monkeypatch.setattr(
+        "src.autonomous_contributor.validate_autonomous_run_by_url",
+        lambda issue_url: (True, "Autonomous run validated."),
+    )
+    monkeypatch.setattr(
+        "src.autonomous_contributor.get_hermes_execution_plan",
+        lambda: (True, "llama3.2:3b", "validated"),
+    )
+
+    def record_pipeline(issue_url, *, regenerate_communication=True):
+        seen["url"] = issue_url
+        seen["regenerate_communication"] = regenerate_communication
+        return (
+            Path("/tmp/summary.md"),
+            True,
+            [{"framework": "pytest", "result": {"success": True}}],
+            "1 file changed",
+        )
+
+    monkeypatch.setattr(
+        "src.autonomous_contributor._run_pipeline",
+        record_pipeline,
+    )
+    monkeypatch.setattr(
+        "src.autonomous_contributor.get_reports_dir",
+        lambda *args: Path("/tmp"),
+    )
+    monkeypatch.setattr(
+        "src.autonomous_contributor.generate_contribution_package",
+        lambda *args, **kwargs: Path("/tmp/package"),
+    )
+
+    from src.autonomous_contributor import run_autonomous_start_work
+
+    result = run_autonomous_start_work(url)
+
+    assert result == Path("/tmp/package")
+    # Same URL, same existing execution path, communication NOT regenerated.
+    assert seen == {"url": url, "regenerate_communication": False}

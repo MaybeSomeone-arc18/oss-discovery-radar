@@ -364,6 +364,38 @@ HTML_TEMPLATE = """<!DOCTYPE html>
             let statusText = status;
             if (status === 'APPROVED') statusText = 'Approved \u2014 comment not yet marked sent';
             if (status === 'COMMENT_SENT') statusText = 'Comment marked sent';
+            let startWorkHtml = '';
+            if (status === 'COMMENT_SENT') {
+                startWorkHtml = `
+                    <button class="btn" id="comm-start-work" onclick="commAction('${esc(url)}', 'start-work')">Start Work</button>
+                    <span style="color:var(--success); font-size:0.875rem; align-self:center;">Ready to start local work</span>
+                `;
+            } else if (status === 'APPROVED') {
+                startWorkHtml = `
+                    <button class="btn" id="comm-start-work" disabled style="background:var(--surface-hover); color:var(--text-muted);" title="Mark Comment Sent first">Start Work</button>
+                    <span style="color:var(--warning); font-size:0.875rem; align-self:center;">Mark Comment Sent first</span>
+                `;
+            } else if (status === 'REVIEW_REQUIRED') {
+                startWorkHtml = `
+                    <button class="btn" id="comm-start-work" disabled style="background:var(--surface-hover); color:var(--text-muted);" title="Approve and mark comment sent first">Start Work</button>
+                    <span style="color:var(--warning); font-size:0.875rem; align-self:center;">Approve & mark sent first</span>
+                `;
+            } else if (status === 'REJECTED') {
+                startWorkHtml = `
+                    <button class="btn" id="comm-start-work" disabled style="background:var(--surface-hover); color:var(--text-muted);" title="Communication is rejected">Start Work</button>
+                    <span style="color:var(--danger); font-size:0.875rem; align-self:center;">Blocked: rejected</span>
+                `;
+            } else if (status === 'NOT_REQUIRED') {
+                startWorkHtml = `
+                    <button class="btn" id="comm-start-work" onclick="commAction('${esc(url)}', 'start-work')">Start Work</button>
+                    <span style="color:var(--success); font-size:0.875rem; align-self:center;">No communication required</span>
+                `;
+            } else {
+                startWorkHtml = `
+                    <button class="btn" id="comm-start-work" disabled style="background:var(--surface-hover); color:var(--text-muted);" title="Unknown status">Start Work</button>
+                    <span style="color:var(--text-muted); font-size:0.875rem; align-self:center;">Unknown status</span>
+                `;
+            }
             document.getElementById('modal-title').innerText = 'Communication Review \u00b7 ' + url;
             document.getElementById('modal-body').innerHTML = `
                 <div style="display:flex; gap:0.5rem; align-items:center; flex-wrap:wrap; margin-bottom:0.75rem;">
@@ -380,6 +412,9 @@ HTML_TEMPLATE = """<!DOCTYPE html>
                     <button class="btn" id="comm-sent" onclick="commAction('${esc(url)}', 'mark-sent')" ${status === 'APPROVED' ? '' : 'disabled'} title="${status === 'APPROVED' ? 'Mark approved comment as sent (local only)' : 'Only available when status is APPROVED'}">Mark Comment Sent</button>
                     <button class="btn" id="comm-save" onclick="commAction('${esc(url)}', 'edit')" style="background:var(--surface-hover); color:var(--text);">Save Reply</button>
                 </div>
+                <div style="display:flex; gap:0.5rem; flex-wrap:wrap; margin-bottom:0.5rem; align-items:center;">
+                    ${startWorkHtml}
+                </div>
                 <div id="comm-result" style="font-size:0.875rem;"></div>
                 <div style="margin-top:0.75rem; color:var(--text-muted); font-size:0.75rem;">Local-only action \u2014 updates the local Radar database. Nothing is posted to GitHub.</div>
             `;
@@ -392,17 +427,20 @@ HTML_TEMPLATE = """<!DOCTYPE html>
         }
 
         async function commAction(url, action) {
-            const buttonIds = ['comm-approve', 'comm-reject', 'comm-save', 'comm-sent'];
+            const buttonIds = ['comm-approve', 'comm-reject', 'comm-save', 'comm-sent', 'comm-start-work'];
             let resultEl = document.getElementById('comm-result');
             buttonIds.forEach(id => { const b = document.getElementById(id); if (b) b.disabled = true; });
             resultEl.style.color = 'var(--text-muted)';
-            resultEl.innerText = 'Working...';
+            resultEl.innerText = action === 'start-work' ? 'Starting local work...' : 'Working...';
             try {
                 const body = { url: url };
                 if (action === 'edit') {
                     body.recommendation = document.getElementById('comm-reply').value;
                 }
-                const res = await fetch('/api/communication/' + action, {
+                const endpoint = action === 'start-work'
+                    ? '/api/implementation/start'
+                    : '/api/communication/' + action;
+                const res = await fetch(endpoint, {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify(body)
@@ -411,16 +449,22 @@ HTML_TEMPLATE = """<!DOCTYPE html>
                 if (!res.ok || data.error) {
                     throw new Error(data.error || ('HTTP ' + res.status));
                 }
-                renderCommunicationModal(url, data.state);
-                const msg = action === 'approve' ? 'Approved \u2713'
-                    : action === 'reject' ? 'Rejected \u2713'
-                    : action === 'mark-sent' ? 'Comment marked sent \u2713'
-                    : 'Reply saved \u2713 (status reset to REVIEW_REQUIRED \u2014 approve again when ready)';
-                resultEl = document.getElementById('comm-result');
-                resultEl.style.color = 'var(--success)';
-                resultEl.innerText = msg;
-                // Keep the rows/badges in sync with the local DB.
-                fetchData();
+                if (action === 'start-work') {
+                    resultEl.style.color = 'var(--success)';
+                    resultEl.innerText = 'Start Work launched \u2713 Package: ' + (data.package || 'unknown');
+                    // Refresh to update badges/rows.
+                    fetchData();
+                } else {
+                    renderCommunicationModal(url, data.state);
+                    const msg = action === 'approve' ? 'Approved \u2713'
+                        : action === 'reject' ? 'Rejected \u2713'
+                        : action === 'mark-sent' ? 'Comment marked sent \u2713'
+                        : 'Reply saved \u2713 (status reset to REVIEW_REQUIRED \u2014 approve again when ready)';
+                    resultEl = document.getElementById('comm-result');
+                    resultEl.style.color = 'var(--success)';
+                    resultEl.innerText = msg;
+                    fetchData();
+                }
             } catch(e) {
                 resultEl.style.color = 'var(--danger)';
                 resultEl.innerText = 'Failed: ' + e.message;
@@ -829,8 +873,9 @@ class DashboardHandler(BaseHTTPRequestHandler):
                     self.send_json({"content": f.read()})
             else:
                 self.send_json({"content": "(No implementation plan found. Run hermes plan first.)"})
-        elif self.path.startswith('/api/communication/'):
-            # Communication review actions are state-changing: POST only.
+        elif self.path.startswith('/api/communication/') or urllib.parse.urlparse(self.path).path == '/api/implementation/start':
+            # Communication review actions and the Start Work handoff are
+            # state-changing: POST only.
             self.send_response(405)
             self.send_header('Allow', 'POST')
             self.end_headers()
@@ -914,6 +959,51 @@ class DashboardHandler(BaseHTTPRequestHandler):
                 str(recommendation).strip(),
                 current.get("communication_reason") or "",
             )
+        elif path == '/api/implementation/start':
+            # Local-only Start Work handoff. Invokes the existing autonomous
+            # pipeline WITHOUT regenerating the communication recommendation.
+            # Requires communication status COMMENT_SENT or NOT_REQUIRED.
+            current = get_communication_state(url)
+            if not current:
+                self.send_json({"error": "Issue not found"}, 404)
+                return
+
+            status = current.get("communication_status")
+            if status == "COMMENT_SENT" or status == "NOT_REQUIRED":
+                pass  # allowed
+            elif status == "REVIEW_REQUIRED":
+                self.send_json({
+                    "error": "Start Work blocked: communication is REVIEW_REQUIRED. "
+                             "Approve and mark comment sent first."
+                }, 409)
+                return
+            elif status == "APPROVED":
+                self.send_json({
+                    "error": "Start Work blocked: communication is APPROVED but not yet marked sent. "
+                             "Mark Comment Sent first."
+                }, 409)
+                return
+            elif status == "REJECTED":
+                self.send_json({
+                    "error": "Start Work blocked: communication is REJECTED. "
+                             "Cannot proceed with rejected communication."
+                }, 409)
+                return
+            else:
+                self.send_json({
+                    "error": f"Start Work blocked: unknown communication status '{status}'."
+                }, 409)
+                return
+
+            from src.autonomous_contributor import run_autonomous_start_work
+            package = run_autonomous_start_work(url)
+            if package is None:
+                self.send_json({"error": "Start Work did not produce a package (skipped/deferred/failed)."}, 500)
+                return
+            self.send_json({"ok": True, "package": str(package)})
+            # Return here: the shared state tail below must not overwrite the
+            # start-work payload (and must not double-send on a live socket).
+            return
         else:
             self.send_json({"error": "Not found"}, 404)
             return

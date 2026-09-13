@@ -393,6 +393,116 @@ def test_reject_after_sent_still_rejects(monkeypatch):
     assert state["approved_at"] is None
 
 
+# --- start-work action ------------------------------------------------------
+
+
+def test_start_work_from_comment_sent_invokes_workflow(monkeypatch):
+    conn = make_conn()
+    seed_issue(conn, comm_status="COMMENT_SENT", approved_at="2025-01-03 10:00:00")
+    patch_local_db(monkeypatch, conn)
+
+    called = []
+
+    def fake_start_work(url):
+        called.append(url)
+        return "/fake/package/path"
+
+    monkeypatch.setattr(
+        "src.autonomous_contributor.run_autonomous_start_work", fake_start_work
+    )
+
+    handler = make_post_handler("/api/implementation/start", {"url": "http://test/1"})
+    DashboardHandler.do_POST(handler)
+
+    assert handler.status == 200
+    assert handler.payload["ok"] is True
+    assert handler.payload["package"] == "/fake/package/path"
+    assert called == ["http://test/1"]
+
+
+def test_start_work_from_not_required_invokes_workflow(monkeypatch):
+    conn = make_conn()
+    seed_issue(conn, comm_status="NOT_REQUIRED")
+    patch_local_db(monkeypatch, conn)
+
+    called = []
+
+    def fake_start_work(url):
+        called.append(url)
+        return "/fake/package/path"
+
+    monkeypatch.setattr(
+        "src.autonomous_contributor.run_autonomous_start_work", fake_start_work
+    )
+
+    handler = make_post_handler("/api/implementation/start", {"url": "http://test/1"})
+    DashboardHandler.do_POST(handler)
+
+    assert handler.status == 200
+    assert called == ["http://test/1"]
+
+
+def test_start_work_from_approved_blocked(monkeypatch):
+    conn = make_conn()
+    seed_issue(conn, comm_status="APPROVED", approved_at="2025-01-03 10:00:00")
+    patch_local_db(monkeypatch, conn)
+
+    handler = make_post_handler("/api/implementation/start", {"url": "http://test/1"})
+    DashboardHandler.do_POST(handler)
+
+    assert handler.status == 409
+    assert "APPROVED" in handler.payload["error"]
+    assert "Mark Comment Sent first" in handler.payload["error"]
+
+
+def test_start_work_from_review_required_blocked(monkeypatch):
+    conn = make_conn()
+    seed_issue(conn, comm_status="REVIEW_REQUIRED")
+    patch_local_db(monkeypatch, conn)
+
+    handler = make_post_handler("/api/implementation/start", {"url": "http://test/1"})
+    DashboardHandler.do_POST(handler)
+
+    assert handler.status == 409
+    assert "REVIEW_REQUIRED" in handler.payload["error"]
+    assert "Approve and mark comment sent first" in handler.payload["error"]
+
+
+def test_start_work_from_rejected_blocked(monkeypatch):
+    conn = make_conn()
+    seed_issue(conn, comm_status="REJECTED")
+    patch_local_db(monkeypatch, conn)
+
+    handler = make_post_handler("/api/implementation/start", {"url": "http://test/1"})
+    DashboardHandler.do_POST(handler)
+
+    assert handler.status == 409
+    assert "REJECTED" in handler.payload["error"]
+    assert "Cannot proceed with rejected" in handler.payload["error"]
+
+
+def test_start_work_unknown_issue_404(monkeypatch):
+    conn = make_conn()
+    patch_local_db(monkeypatch, conn)
+
+    handler = make_post_handler("/api/implementation/start", {"url": "http://nope/1"})
+    DashboardHandler.do_POST(handler)
+
+    assert handler.status == 404
+
+
+def test_start_work_is_post_only(monkeypatch):
+    conn = make_conn()
+    seed_issue(conn, comm_status="COMMENT_SENT")
+    patch_local_db(monkeypatch, conn)
+
+    handler = FakeHandler("/api/implementation/start")
+    DashboardHandler.do_GET(handler)
+
+    assert handler.status == 405
+    assert ("Allow", "POST") in handler.response_headers
+
+
 # --- POST-only actions ------------------------------------------------------
 
 
@@ -401,7 +511,7 @@ def test_communication_actions_are_post_only(monkeypatch):
     seed_issue(conn)
     patch_local_db(monkeypatch, conn)
 
-    for path in ("/api/communication/approve", "/api/communication/mark-sent"):
+    for path in ("/api/communication/approve", "/api/communication/mark-sent", "/api/implementation/start"):
         handler = FakeHandler(path)
         DashboardHandler.do_GET(handler)
 
@@ -457,17 +567,29 @@ def test_no_github_write_on_any_action(monkeypatch):
             lambda *a, **k: (_ for _ in ()).throw(AssertionError("GitHub write attempted")),
         )
 
+    # The Start Work endpoint hands off to the existing autonomous local
+    # workflow; stub that boundary so this guard test exercises only the
+    # endpoint layer (the pipeline's own local-only behavior is covered by
+    # test_autonomous_guard / test_autonomous_contributor).
+    monkeypatch.setattr(
+        "src.autonomous_contributor.run_autonomous_start_work",
+        lambda url: "/fake/package/path",
+    )
+
     conn = make_conn()
-    # APPROVED so every action below -- including mark-sent -- is valid from
-    # its current state.
-    seed_issue(conn, comm_status="APPROVED")
+    # COMMENT_SENT so every action below is valid from its current state.
+    seed_issue(conn, comm_status="COMMENT_SENT")
     statements = []
     conn.set_trace_callback(lambda sql: statements.append(sql))
     patch_local_db(monkeypatch, conn)
 
+    # Ordered so every action is valid from the current state: start-work and
+    # mark-sent are status-gated (COMMENT_SENT / APPROVED), while
+    # approve / reject / edit are allowed from any status.
     for path, body in (
-        ("/api/communication/mark-sent", {"url": "http://test/1"}),
+        ("/api/implementation/start", {"url": "http://test/1"}),
         ("/api/communication/approve", {"url": "http://test/1"}),
+        ("/api/communication/mark-sent", {"url": "http://test/1"}),
         ("/api/communication/reject", {"url": "http://test/1"}),
         ("/api/communication/edit", {"url": "http://test/1", "recommendation": "New reply"}),
     ):

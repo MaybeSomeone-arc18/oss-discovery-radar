@@ -7,7 +7,7 @@ from src.opportunity_manager import communication_allows_implementation, get_com
 from src.autonomous_guard import get_hermes_execution_plan, validate_autonomous_run_by_url
 
 
-def _run_pipeline(issue_id_or_url) -> tuple:
+def _run_pipeline(issue_id_or_url, *, regenerate_communication=True) -> tuple:
     if isinstance(issue_id_or_url, str) and issue_id_or_url.startswith("http"):
         issue = get_issue_context_by_url(issue_id_or_url)
     else:
@@ -28,7 +28,10 @@ def _run_pipeline(issue_id_or_url) -> tuple:
     if not research_file.exists():
         raise RuntimeError("Research phase reported success but did not produce research.md.")
 
-    communication = generate_communication_recommendation(issue["url"])
+    if regenerate_communication:
+        # Standalone runs regenerate the recommendation, which resets the
+        # status to REVIEW_REQUIRED for a human review pass.
+        generate_communication_recommendation(issue["url"])
     communication_state = get_communication_state(issue["url"])
 
     if not communication_allows_implementation(issue["url"]):
@@ -126,7 +129,7 @@ def run_best_autonomous():
     return run_autonomous(issue_id)
 
 
-def run_autonomous_by_url(issue_url: str) -> Path:
+def run_autonomous_by_url(issue_url: str, *, regenerate_communication=True) -> Path:
     issue = get_issue_context_by_url(issue_url)
     if not issue:
         log_event(
@@ -169,7 +172,7 @@ def run_autonomous_by_url(issue_url: str) -> Path:
     )
 
     try:
-        summary_file, success, test_results, diff_stat = _run_pipeline(issue_url)
+        summary_file, success, test_results, diff_stat = _run_pipeline(issue_url, regenerate_communication=regenerate_communication)
 
         org = issue["org_slug"]
         repo = issue["repo_name"].split("/")[1]
@@ -199,3 +202,14 @@ def run_autonomous_by_url(issue_url: str) -> Path:
             issue_id=issue_id,
         )
         raise
+
+
+def run_autonomous_start_work(issue_url: str) -> Path:
+    """
+    Entry point for the dashboard "Start Work" button.
+
+    Runs the autonomous pipeline WITHOUT regenerating the communication
+    recommendation (the human has already approved and marked it sent).
+    Requires communication status to be COMMENT_SENT or NOT_REQUIRED.
+    """
+    return run_autonomous_by_url(issue_url, regenerate_communication=False)
