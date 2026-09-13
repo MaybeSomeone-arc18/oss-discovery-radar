@@ -1,6 +1,17 @@
 import pytest
+import requests
+from unittest.mock import patch
 
 from src.autonomous_guard import validate_autonomous_run, validate_hermes_execution
+from src.omniroute import OMNIROUTE_MODEL_DEFAULT, reset_omniroute_availability_cache
+
+
+@pytest.fixture(autouse=True)
+def fresh_omniroute_cache():
+    """Keep the OmniRoute availability cache empty between tests."""
+    reset_omniroute_availability_cache()
+    yield
+    reset_omniroute_availability_cache()
 
 
 def test_validate_autonomous_run_accepts_ready_issue(monkeypatch):
@@ -257,3 +268,112 @@ def test_insufficient_memory_returns_no_safe_model(monkeypatch):
     assert ok is False
     assert model is None
     assert "Insufficient memory" in reason
+
+
+# --- task routing through the execution-plan decision point -----------------
+
+
+def test_heavy_task_routes_to_omniroute_when_available(monkeypatch):
+    """b. heavy + OmniRoute available -> OmniRoute, even when 3B is unsafe."""
+    from src.autonomous_guard import get_hermes_execution_plan
+
+    monkeypatch.setenv("OMNIROUTE_API_KEY", "secret-key")
+    monkeypatch.setattr("src.autonomous_guard.verify_local_provider", lambda: None)
+    monkeypatch.setattr(
+        "src.autonomous_guard.check_resources_for_hermes",
+        lambda: (False, "Insufficient memory headroom"),
+    )
+    monkeypatch.setattr(
+        "src.autonomous_guard.list_local_models",
+        lambda: [
+            {"name": "qwen3.5:9b", "size": 6594474711},
+            {"name": "llama3.2:3b", "size": 2019393189},
+        ],
+    )
+    monkeypatch.setattr("src.autonomous_guard.get_available_memory_mb", lambda: 2000)
+
+    with patch("src.omniroute.requests.get") as mock_get:
+        mock_get.return_value.status_code = 200
+        ok, model, reason = get_hermes_execution_plan("heavy")
+
+    assert ok is True
+    assert model == OMNIROUTE_MODEL_DEFAULT
+    assert "OmniRoute" in reason
+    assert "qwen3.5:9b" not in model
+
+
+def test_heavy_task_falls_back_to_3b_when_omniroute_down(monkeypatch):
+    """c. heavy + OmniRoute unavailable + 3B safe -> llama3.2:3b."""
+    from src.autonomous_guard import get_hermes_execution_plan
+
+    monkeypatch.setenv("OMNIROUTE_API_KEY", "secret-key")
+    monkeypatch.setattr("src.autonomous_guard.verify_local_provider", lambda: None)
+    monkeypatch.setattr(
+        "src.autonomous_guard.check_resources_for_hermes",
+        lambda: (False, "Insufficient memory headroom"),
+    )
+    monkeypatch.setattr(
+        "src.autonomous_guard.list_local_models",
+        lambda: [
+            {"name": "qwen3.5:9b", "size": 6594474711},
+            {"name": "llama3.2:3b", "size": 2019393189},
+        ],
+    )
+    monkeypatch.setattr("src.autonomous_guard.get_available_memory_mb", lambda: 6000)
+
+    with patch(
+        "src.omniroute.requests.get",
+        side_effect=requests.exceptions.ConnectionError("connection refused"),
+    ):
+        ok, model, reason = get_hermes_execution_plan("heavy")
+
+    assert ok is True
+    assert model == "llama3.2:3b"
+    assert "qwen3.5:9b" not in model
+
+
+def test_heavy_task_defers_when_omniroute_down_and_3b_unsafe(monkeypatch):
+    """d. heavy + OmniRoute unavailable + 3B unsafe -> defer."""
+    from src.autonomous_guard import get_hermes_execution_plan
+
+    monkeypatch.setenv("OMNIROUTE_API_KEY", "secret-key")
+    monkeypatch.setattr("src.autonomous_guard.verify_local_provider", lambda: None)
+    monkeypatch.setattr(
+        "src.autonomous_guard.check_resources_for_hermes",
+        lambda: (False, "Insufficient memory headroom"),
+    )
+    monkeypatch.setattr(
+        "src.autonomous_guard.list_local_models",
+        lambda: [{"name": "llama3.2:3b", "size": 2019393189}],
+    )
+    monkeypatch.setattr("src.autonomous_guard.get_available_memory_mb", lambda: 2000)
+
+    with patch(
+        "src.omniroute.requests.get",
+        side_effect=requests.exceptions.ConnectionError("connection refused"),
+    ):
+        ok, model, reason = get_hermes_execution_plan("heavy")
+
+    assert ok is False
+    assert model is None
+    assert "Insufficient memory headroom" in reason
+
+
+def test_lightweight_task_never_uses_omniroute_even_when_available(monkeypatch):
+    """a. lightweight stays on llama3.2:3b; no OmniRoute probe is made."""
+    from src.autonomous_guard import get_hermes_execution_plan
+
+    monkeypatch.setenv("OMNIROUTE_API_KEY", "secret-key")
+    monkeypatch.setattr("src.autonomous_guard.verify_local_provider", lambda: None)
+    monkeypatch.setattr(
+        "src.autonomous_guard.check_resources_for_hermes",
+        lambda: (True, "Resources sufficient"),
+    )
+
+    with patch("src.omniroute.requests.get") as mock_get:
+        ok, model, reason = get_hermes_execution_plan("lightweight")
+
+    assert ok is True
+    assert model == "llama3.2:3b"
+    assert "llama3.2:3b" in reason
+    mock_get.assert_not_called()

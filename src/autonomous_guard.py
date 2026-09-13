@@ -5,9 +5,87 @@ from src.hermes_agent import (
     select_local_model,
 )
 from src.resource_manager import check_resources_for_hermes, get_available_memory_mb
+from src.omniroute import (
+    OMNIROUTE_MODEL_DEFAULT,
+    get_omniroute_config,
+    omniroute_is_available_cached,
+)
+
+TASK_TYPES = ("lightweight", "heavy")
+
+# Models that must never be automatically selected by routing, even when they
+# are configured as the OmniRoute model.
+BLOCKED_MODELS = ("qwen3.5:9b",)
 
 
-def get_hermes_execution_plan():
+def select_execution_provider(
+    task_type,
+    available_memory_mb,
+    models=None,
+    resources_ok=False,
+    resource_msg=None,
+    omniroute_available=None,
+):
+    """Route a Hermes task to an execution provider (llama3.2:3b or OmniRoute).
+
+    Minimal task taxonomy (TASK_TYPES):
+      * "lightweight" -- llama3.2:3b stays the default; OmniRoute is never
+        probed or used.
+      * "heavy" -- OmniRoute (auto/coding:free) is used when available;
+        otherwise fall back to llama3.2:3b when local resources permit;
+        otherwise defer.
+
+    qwen3.5:9b is never selected. Returns (ok, model, reason) like
+    get_hermes_execution_plan(). `resources_ok`/`resource_msg` carry the result
+    of check_resources_for_hermes(); when resources are confirmed OK the local
+    model inventory is skipped (verify_local_provider already confirmed
+    llama3.2:3b is installed, and the default headroom gate is far above the
+    3B memory threshold).
+    """
+    if task_type not in TASK_TYPES:
+        raise ValueError(
+            f"Unknown task type {task_type!r}; expected one of {TASK_TYPES}"
+        )
+
+    # Lightweight tasks never touch OmniRoute (not even a probe); only
+    # explicitly heavy tasks may route to it.
+    if task_type == "heavy" and omniroute_available is None:
+        omniroute_available = omniroute_is_available_cached()
+
+    if task_type == "heavy" and omniroute_available:
+        config = get_omniroute_config()
+        omniroute_model = (
+            config["model"] if config else OMNIROUTE_MODEL_DEFAULT
+        )
+        if omniroute_model not in BLOCKED_MODELS:
+            return (
+                True,
+                omniroute_model,
+                "Heavy task routed to OmniRoute provider.",
+            )
+
+    if resources_ok:
+        return True, "llama3.2:3b", "Hermes execution validated with llama3.2:3b."
+
+    try:
+        local_model = select_local_model(available_memory_mb, models)
+    except Exception as exc:
+        return False, None, f"Hermes model selection failed: {exc}"
+
+    if local_model == "llama3.2:3b":
+        return True, "llama3.2:3b", "Hermes execution validated with llama3.2:3b."
+
+    if resource_msg:
+        return False, None, resource_msg
+    return (
+        False,
+        None,
+        f"Insufficient local resources for llama3.2:3b "
+        f"(available {available_memory_mb:.0f}MB). Deferring.",
+    )
+
+
+def get_hermes_execution_plan(task_type="lightweight"):
     try:
         verify_local_provider()
     except Exception as exc:
@@ -15,21 +93,21 @@ def get_hermes_execution_plan():
 
     resources_ok, resource_msg = check_resources_for_hermes()
 
-    if resources_ok:
-        return True, "llama3.2:3b", "Hermes execution validated with llama3.2:3b."
+    if not resources_ok:
+        try:
+            models = list_local_models()
+        except Exception as exc:
+            return False, None, f"Hermes model selection failed: {exc}"
+    else:
+        models = None
 
-    try:
-        selected_model = select_local_model(
-            get_available_memory_mb(),
-            list_local_models(),
-        )
-    except Exception as exc:
-        return False, None, f"Hermes model selection failed: {exc}"
-
-    if selected_model == "llama3.2:3b":
-        return True, "llama3.2:3b", "Hermes execution validated with llama3.2:3b."
-
-    return False, None, resource_msg
+    return select_execution_provider(
+        task_type,
+        get_available_memory_mb(),
+        models=models,
+        resources_ok=resources_ok,
+        resource_msg=resource_msg,
+    )
 
 
 def validate_autonomous_run_by_url(issue_url: str):

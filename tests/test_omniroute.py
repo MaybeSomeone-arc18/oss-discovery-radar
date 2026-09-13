@@ -1,12 +1,24 @@
 import requests
+import pytest
 from unittest.mock import patch
 
 from src.omniroute import (
     get_omniroute_config,
     omniroute_is_available,
+    omniroute_is_available_cached,
+    reset_omniroute_availability_cache,
+    OMNIROUTE_AVAILABILITY_TTL_SECONDS,
     OMNIROUTE_BASE_URL_DEFAULT,
     OMNIROUTE_MODEL_DEFAULT,
 )
+
+
+@pytest.fixture(autouse=True)
+def fresh_omniroute_cache():
+    """Each test starts and ends with an empty availability cache."""
+    reset_omniroute_availability_cache()
+    yield
+    reset_omniroute_availability_cache()
 
 
 def test_omniroute_config_resolves_when_configured(monkeypatch):
@@ -102,3 +114,60 @@ def test_qwen_never_automatically_selected():
 
     assert select_local_model(16384, models) != "qwen3.5:9b"
     assert select_local_model(9000, models) != "qwen3.5:9b"
+
+
+# --- availability cache (routing must not re-probe within a TTL window) -----
+
+
+def test_omniroute_availability_cached_within_ttl(monkeypatch):
+    """Repeated lookups inside the TTL window issue exactly one request."""
+    monkeypatch.setenv("OMNIROUTE_API_KEY", "secret-key")
+
+    with patch("src.omniroute.requests.get") as mock_get:
+        mock_get.return_value.status_code = 200
+        assert omniroute_is_available_cached() is True
+        assert omniroute_is_available_cached() is True
+        assert omniroute_is_available_cached() is True
+
+    assert mock_get.call_count == 1
+
+
+def test_omniroute_availability_caches_failed_probe(monkeypatch):
+    """A failed probe is cached too; no retry storm within the TTL window."""
+    monkeypatch.setenv("OMNIROUTE_API_KEY", "secret-key")
+
+    with patch(
+        "src.omniroute.requests.get",
+        side_effect=requests.exceptions.ConnectionError("connection refused"),
+    ) as mock_get:
+        assert omniroute_is_available_cached() is False
+        assert omniroute_is_available_cached() is False
+
+    assert mock_get.call_count == 1
+
+
+def test_omniroute_availability_reprobes_after_ttl(monkeypatch):
+    """After the TTL elapses the next lookup probes again."""
+    import src.omniroute as mod
+
+    monkeypatch.setenv("OMNIROUTE_API_KEY", "secret-key")
+
+    class FakeTime:
+        def __init__(self):
+            self.now = 1000.0
+
+        def monotonic(self):
+            return self.now
+
+    fake_time = FakeTime()
+    monkeypatch.setattr(mod, "time", fake_time)
+
+    with patch("src.omniroute.requests.get") as mock_get:
+        mock_get.return_value.status_code = 200
+        assert omniroute_is_available_cached() is True
+        assert omniroute_is_available_cached() is True
+        assert mock_get.call_count == 1
+
+        fake_time.now += OMNIROUTE_AVAILABILITY_TTL_SECONDS + 1
+        assert omniroute_is_available_cached() is True
+        assert mock_get.call_count == 2
