@@ -333,6 +333,97 @@ HTML_TEMPLATE = """<!DOCTYPE html>
             }
         }
 
+        function esc(s) {
+            return String(s == null ? '' : s)
+                .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+                .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+        }
+
+        function commBadgeClass(status) {
+            if (status === 'APPROVED' || status === 'NOT_REQUIRED') return 'status-success';
+            if (status === 'REJECTED') return 'status-danger';
+            return 'status-warning';
+        }
+
+        function commStateFromUrl(url) {
+            const data = window._radarData;
+            if (data && data.opportunities) {
+                for (const o of data.opportunities) {
+                    if (o.url === url) return o.communication || {};
+                }
+            }
+            return {};
+        }
+
+        function renderCommunicationModal(url, state) {
+            state = state || commStateFromUrl(url);
+            const status = state.status || 'UNKNOWN';
+            const approvedAt = state.approved_at || null;
+            const reply = state.recommendation || '';
+            const reason = state.reason || '';
+            document.getElementById('modal-title').innerText = 'Communication Review \u00b7 ' + url;
+            document.getElementById('modal-body').innerHTML = `
+                <div style="display:flex; gap:0.5rem; align-items:center; flex-wrap:wrap; margin-bottom:0.75rem;">
+                    <span class="status-badge ${commBadgeClass(status)}">${esc(status)}</span>
+                    <span style="color:var(--text-muted); font-size:0.875rem;">Approved at: ${approvedAt ? esc(approvedAt) : 'not approved yet'}</span>
+                </div>
+                <div style="margin-bottom:0.5rem; font-weight:600;">Suggested maintainer reply (editable)</div>
+                <textarea id="comm-reply" rows="6" style="width:100%; box-sizing:border-box; background:rgba(0,0,0,0.3); color:var(--text); border:1px solid var(--border); border-radius:6px; padding:0.5rem; font-family:monospace; font-size:0.875rem;">${esc(reply)}</textarea>
+                <div style="margin:0.75rem 0 0.25rem; font-weight:600;">Reason</div>
+                <pre id="comm-reason" style="white-space:pre-wrap; margin:0 0 0.75rem;">${esc(reason) || 'No reason recorded.'}</pre>
+                <div style="display:flex; gap:0.5rem; flex-wrap:wrap; margin-bottom:0.5rem;">
+                    <button class="btn" id="comm-approve" onclick="commAction('${esc(url)}', 'approve')">Approve</button>
+                    <button class="btn" id="comm-reject" onclick="commAction('${esc(url)}', 'reject')" style="background:var(--danger);">Reject</button>
+                    <button class="btn" id="comm-save" onclick="commAction('${esc(url)}', 'edit')" style="background:var(--surface-hover); color:var(--text);">Save Reply</button>
+                </div>
+                <div id="comm-result" style="font-size:0.875rem;"></div>
+                <div style="margin-top:0.75rem; color:var(--text-muted); font-size:0.75rem;">Local-only action \u2014 updates the local Radar database. Nothing is posted to GitHub.</div>
+            `;
+            document.getElementById('myModal').style.display = "block";
+            document.getElementById('copy-btn').innerText = "Copy to Clipboard";
+        }
+
+        function showCommunication(url) {
+            renderCommunicationModal(url);
+        }
+
+        async function commAction(url, action) {
+            const buttonIds = ['comm-approve', 'comm-reject', 'comm-save'];
+            let resultEl = document.getElementById('comm-result');
+            buttonIds.forEach(id => { const b = document.getElementById(id); if (b) b.disabled = true; });
+            resultEl.style.color = 'var(--text-muted)';
+            resultEl.innerText = 'Working...';
+            try {
+                const body = { url: url };
+                if (action === 'edit') {
+                    body.recommendation = document.getElementById('comm-reply').value;
+                }
+                const res = await fetch('/api/communication/' + action, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(body)
+                });
+                const data = await res.json();
+                if (!res.ok || data.error) {
+                    throw new Error(data.error || ('HTTP ' + res.status));
+                }
+                renderCommunicationModal(url, data.state);
+                const msg = action === 'approve' ? 'Approved \u2713'
+                    : action === 'reject' ? 'Rejected \u2713'
+                    : 'Reply saved \u2713 (status reset to REVIEW_REQUIRED \u2014 approve again when ready)';
+                resultEl = document.getElementById('comm-result');
+                resultEl.style.color = 'var(--success)';
+                resultEl.innerText = msg;
+                // Keep the rows/badges in sync with the local DB.
+                fetchData();
+            } catch(e) {
+                resultEl.style.color = 'var(--danger)';
+                resultEl.innerText = 'Failed: ' + e.message;
+            } finally {
+                buttonIds.forEach(id => { const b = document.getElementById(id); if (b) b.disabled = false; });
+            }
+        }
+
         async function fetchData() {
             const btn = document.getElementById('refresh-btn');
             const refreshStatus = document.getElementById('refresh-status');
@@ -347,6 +438,8 @@ HTML_TEMPLATE = """<!DOCTYPE html>
                 if (data.error) {
                     throw new Error(data.error);
                 }
+                // Keep the last snapshot for the Communication review modal.
+                window._radarData = data;
                 
                 // Render Hermes
                 const hs = document.getElementById('hermes-status');
@@ -410,12 +503,14 @@ HTML_TEMPLATE = """<!DOCTYPE html>
                             <td>
                                 <div style="font-size: 0.875rem;">${o.readiness}</div>
                                 <div style="font-size: 0.75rem; color: var(--text-muted);">GSoC: ${o.gsoc ? o.gsoc.toFixed(1) : 'N/A'}</div>
+                                <div style="font-size: 0.75rem; margin-top: 0.25rem;">Comm: <span class="status-badge ${commBadgeClass((o.communication || {}).status)}" style="font-size: 0.7rem; padding: 0.1rem 0.45rem;">${(o.communication && o.communication.status) || 'N/A'}</span></div>
                             </td>
                             <td>
                                 <button class="btn btn-small" onclick="fetchEndpoint('/api/prompt?url=' + encodeURIComponent('${o.url}'), 'Implementation Prompt')">Prompt</button>
                                 <button class="btn btn-small" onclick="fetchEndpoint('/api/workspace?url=' + encodeURIComponent('${o.url}'), 'Workspace Path')">Workspace</button>
                                 <button class="btn btn-small" onclick="fetchEndpoint('/api/research?url=' + encodeURIComponent('${o.url}'), 'Research Report')">Research</button>
                                 <button class="btn btn-small" onclick="fetchEndpoint('/api/plan?url=' + encodeURIComponent('${o.url}'), 'Implementation Plan')">Plan</button>
+                                <button class="btn btn-small" onclick="showCommunication('${esc(o.url)}')">Comm</button>
                             </td>
                         </tr>`;
                     });
@@ -531,6 +626,19 @@ def collect_freshness_metadata():
     return freshness
 
 
+def normalize_communication_state(state):
+    """Map the DB column names from get_communication_state to the dashboard
+    payload shape used by /api/data opportunities and the review modal."""
+    if not state:
+        return None
+    return {
+        "status": state.get("communication_status"),
+        "recommendation": state.get("communication_recommendation"),
+        "reason": state.get("communication_reason"),
+        "approved_at": state.get("communication_approved_at"),
+    }
+
+
 class DashboardHandler(BaseHTTPRequestHandler):
     def send_json(self, data, status=200):
         self.send_response(status)
@@ -580,7 +688,9 @@ class DashboardHandler(BaseHTTPRequestHandler):
             with get_connection() as conn:
                 cursor = conn.cursor()
                 cursor.execute('''
-                    SELECT i.url, i.repo_name, i.issue_number, i.title, i.body_preview, i.org_slug
+                    SELECT i.url, i.repo_name, i.issue_number, i.title, i.body_preview, i.org_slug,
+                           i.communication_status, i.communication_recommendation,
+                           i.communication_reason, i.communication_approved_at
                     FROM issues i
                     LEFT JOIN repositories r ON i.repo_name = r.name
                     WHERE i.state = 'OPEN' 
@@ -593,7 +703,8 @@ class DashboardHandler(BaseHTTPRequestHandler):
                 
                 scored_candidates = []
                 for row in rows:
-                    url, repo_name, issue_number, title, body_preview, org_slug = row
+                    (url, repo_name, issue_number, title, body_preview, org_slug,
+                     comm_status, comm_recommendation, comm_reason, comm_approved_at) = row
                     score, notes = calculate_first_contribution_score(url)
                     if score > 0:
                         cur2 = conn.cursor()
@@ -605,7 +716,13 @@ class DashboardHandler(BaseHTTPRequestHandler):
                         if readiness == "READY_NOW":
                             scored_candidates.append({
                                 "url": url, "repo": repo_name, "num": issue_number, "title": title,
-                                "score": score, "gsoc": gsoc, "readiness": readiness
+                                "score": score, "gsoc": gsoc, "readiness": readiness,
+                                "communication": {
+                                    "status": comm_status,
+                                    "recommendation": comm_recommendation,
+                                    "reason": comm_reason,
+                                    "approved_at": comm_approved_at,
+                                },
                             })
                             
                 scored_candidates.sort(key=lambda x: x["score"], reverse=True)
@@ -707,9 +824,82 @@ class DashboardHandler(BaseHTTPRequestHandler):
                     self.send_json({"content": f.read()})
             else:
                 self.send_json({"content": "(No implementation plan found. Run hermes plan first.)"})
+        elif self.path.startswith('/api/communication/'):
+            # Communication review actions are state-changing: POST only.
+            self.send_response(405)
+            self.send_header('Allow', 'POST')
+            self.end_headers()
         else:
             self.send_response(404)
             self.end_headers()
+
+    def do_POST(self):
+        """Local-only state-changing dashboard actions.
+
+        Communication review actions (approve / reject / edit) update ONLY the
+        local Radar database via the existing opportunity_manager functions.
+        They never post to GitHub, never create commits/branches/pushes/PRs,
+        and never trigger sync, model inference, or the daily pipeline.
+        """
+        path = urllib.parse.urlparse(self.path).path
+
+        try:
+            content_length = int(self.headers.get('Content-Length', 0) or 0)
+        except (TypeError, ValueError):
+            content_length = 0
+        raw = self.rfile.read(content_length) if content_length else b''
+        try:
+            body = json.loads(raw) if raw else {}
+        except json.JSONDecodeError:
+            self.send_json({"error": "Invalid JSON body"}, 400)
+            return
+        if not isinstance(body, dict):
+            self.send_json({"error": "Invalid JSON body"}, 400)
+            return
+
+        url = body.get('url')
+        if not url:
+            self.send_json({"error": "Missing url"}, 400)
+            return
+
+        from src.opportunity_manager import (
+            approve_communication,
+            reject_communication,
+            set_communication_recommendation,
+            get_communication_state,
+        )
+
+        if path == '/api/communication/approve':
+            if not approve_communication(url):
+                self.send_json({"error": "Issue not found"}, 404)
+                return
+        elif path == '/api/communication/reject':
+            if not reject_communication(url, body.get('reason')):
+                self.send_json({"error": "Issue not found"}, 404)
+                return
+        elif path == '/api/communication/edit':
+            recommendation = body.get('recommendation')
+            if not recommendation or not str(recommendation).strip():
+                self.send_json({"error": "Missing recommendation"}, 400)
+                return
+            current = get_communication_state(url)
+            if not current:
+                self.send_json({"error": "Issue not found"}, 404)
+                return
+            # Persist the edited reply locally; keep the existing reason.
+            # Mirrors the generation path: a new recommendation resets the
+            # review status so it must be re-approved by the human.
+            set_communication_recommendation(
+                url,
+                str(recommendation).strip(),
+                current.get("communication_reason") or "",
+            )
+        else:
+            self.send_json({"error": "Not found"}, 404)
+            return
+
+        # Return the fresh local state so the UI can update immediately.
+        self.send_json({"ok": True, "state": normalize_communication_state(get_communication_state(url))})
 
 def run_dashboard():
     with socketserver.TCPServer(("127.0.0.1", PORT), DashboardHandler) as httpd:

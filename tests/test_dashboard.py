@@ -48,6 +48,10 @@ def make_test_conn():
             contribution_value_score REAL,
             opportunity_score REAL,
             readiness_status TEXT,
+            communication_status TEXT DEFAULT 'REVIEW_REQUIRED',
+            communication_recommendation TEXT,
+            communication_reason TEXT,
+            communication_approved_at TIMESTAMP,
             FOREIGN KEY (repo_name) REFERENCES repositories(name)
         )
     """)
@@ -414,7 +418,8 @@ def test_dashboard_data(mock_check_prereq, mock_calc_score, mock_open, mock_mtim
 
     # Opportunities fetchall
     mock_cursor.fetchall.return_value = [
-        ("url1", "repo1", 123, "title1", "preview", "org1")
+        ("url1", "repo1", 123, "title1", "preview", "org1",
+         "REVIEW_REQUIRED", "suggested reply", "reason", None)
     ]
     # gsoc fetchone
     mock_cursor.fetchone.return_value = (5.5,)
