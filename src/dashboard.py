@@ -223,8 +223,9 @@ HTML_TEMPLATE = """<!DOCTYPE html>
     <div class="container">
         <div class="header">
             <h1>OSS Discovery Radar</h1>
-            <div>
-                <button class="btn" onclick="fetchData()">Refresh Data</button>
+            <div style="display: flex; align-items: center; gap: 0.75rem;">
+                <span id="refresh-status" class="status-badge status-warning" style="display: none;"></span>
+                <button class="btn" id="refresh-btn" onclick="fetchData()">Refresh Data</button>
             </div>
         </div>
         
@@ -253,6 +254,29 @@ HTML_TEMPLATE = """<!DOCTYPE html>
                             <span>Background Scheduler</span>
                             <span id="scheduler-status" class="status-badge">Checking...</span>
                         </div>
+                    </div>
+                </div>
+                
+                <div class="card">
+                    <h2>Data Freshness</h2>
+                    <div class="system-status">
+                        <div class="status-row">
+                            <span>Latest issue data</span>
+                            <span id="freshness-issues" class="status-badge">Loading...</span>
+                        </div>
+                        <div class="status-row">
+                            <span>Latest daily run</span>
+                            <span id="freshness-run" class="status-badge">Loading...</span>
+                        </div>
+                        <div class="status-row">
+                            <span>Last sync</span>
+                            <span id="freshness-sync" class="status-badge">Loading...</span>
+                        </div>
+                        <div class="status-row">
+                            <span>Payload generated</span>
+                            <span id="freshness-generated" class="status-badge">Loading...</span>
+                        </div>
+                        <div id="freshness-error" style="display: none; color: var(--danger); font-size: 0.875rem;"></div>
                     </div>
                 </div>
                 
@@ -310,9 +334,19 @@ HTML_TEMPLATE = """<!DOCTYPE html>
         }
 
         async function fetchData() {
+            const btn = document.getElementById('refresh-btn');
+            const refreshStatus = document.getElementById('refresh-status');
+            const errEl = document.getElementById('freshness-error');
+            btn.disabled = true;
+            btn.innerText = 'Refreshing...';
+            refreshStatus.style.display = 'none';
+            if (errEl) { errEl.style.display = 'none'; }
             try {
                 const res = await fetch('/api/data');
                 const data = await res.json();
+                if (data.error) {
+                    throw new Error(data.error);
+                }
                 
                 // Render Hermes
                 const hs = document.getElementById('hermes-status');
@@ -389,8 +423,40 @@ HTML_TEMPLATE = """<!DOCTYPE html>
                 oppsHtml += "</table>";
                 document.getElementById('opportunities-content').innerHTML = oppsHtml;
                 
+                // Render freshness metadata (read-only local state)
+                const f = data.freshness || {};
+                document.getElementById('freshness-issues').innerText =
+                    f.latest_issue_timestamp || 'No issue data yet';
+                const run = f.daily_run || null;
+                document.getElementById('freshness-run').innerText =
+                    run ? (run.status + ' \u00b7 ' + run.run_date) : 'No daily run recorded';
+                const sync = f.sync || null;
+                document.getElementById('freshness-sync').innerText =
+                    sync ? (sync.status + ' \u00b7 ' + (sync.timestamp || 'unknown')
+                        + (sync.status === 'failed' && sync.message ? ' \u2014 ' + sync.message.slice(0, 100) : ''))
+                    : 'No sync recorded';
+                document.getElementById('freshness-generated').innerText = f.generated_at || 'N/A';
+                if (f.error) {
+                    errEl.innerText = 'Freshness unavailable: ' + f.error;
+                    errEl.style.display = 'block';
+                }
+                
+                btn.innerText = 'Updated ' + new Date().toLocaleTimeString();
+                refreshStatus.className = "status-badge status-success";
+                refreshStatus.innerText = 'OK';
+                refreshStatus.style.display = 'inline-block';
             } catch(e) {
                 console.error("Failed to load dashboard data", e);
+                btn.innerText = 'Refresh failed';
+                refreshStatus.className = "status-badge status-danger";
+                refreshStatus.innerText = 'Error';
+                refreshStatus.style.display = 'inline-block';
+                if (errEl) {
+                    errEl.innerText = 'Refresh failed: ' + e.message;
+                    errEl.style.display = 'block';
+                }
+            } finally {
+                btn.disabled = false;
             }
         }
         
@@ -406,6 +472,64 @@ HTML_TEMPLATE = """<!DOCTYPE html>
 </body>
 </html>
 """
+
+def collect_freshness_metadata():
+    """Read-only freshness snapshot of the current LOCAL state.
+
+    Pure SELECTs against the local SQLite DB and audit log. This never
+    triggers GitHub synchronization, AI/model inference, or the daily
+    pipeline -- it only re-reads what is already stored.
+    """
+    freshness = {
+        "latest_issue_timestamp": None,
+        "daily_run": None,
+        "sync": None,
+        "generated_at": datetime.now().isoformat(timespec="seconds"),
+    }
+    try:
+        with get_connection() as conn:
+            # Latest issue/update timestamp available in the local DB.
+            row = conn.execute(
+                "SELECT MAX(updated_at) FROM issues"
+                " WHERE updated_at IS NOT NULL AND updated_at != ''"
+            ).fetchone()
+            latest = row[0] if row and row[0] else None
+            if not latest:
+                row = conn.execute(
+                    "SELECT MAX(discovered_at) FROM issues"
+                ).fetchone()
+                latest = row[0] if row and row[0] else None
+            freshness["latest_issue_timestamp"] = latest
+
+            # Latest manual daily-run status/date.
+            row = conn.execute(
+                "SELECT run_date, status, started_at, completed_at, error_message"
+                " FROM daily_runs ORDER BY run_date DESC LIMIT 1"
+            ).fetchone()
+            if row:
+                freshness["daily_run"] = {
+                    "run_date": row[0],
+                    "status": row[1],
+                    "started_at": row[2],
+                    "completed_at": row[3],
+                    "error_message": row[4],
+                }
+
+            # Latest sync status/error from the existing audit log.
+            row = conn.execute(
+                "SELECT timestamp, result, message FROM audit_logs"
+                " WHERE action = 'sync' ORDER BY timestamp DESC LIMIT 1"
+            ).fetchone()
+            if row:
+                freshness["sync"] = {
+                    "timestamp": row[0],
+                    "status": row[1],
+                    "message": row[2],
+                }
+    except Exception as e:
+        freshness["error"] = str(e)
+    return freshness
+
 
 class DashboardHandler(BaseHTTPRequestHandler):
     def send_json(self, data, status=200):
@@ -488,7 +612,11 @@ class DashboardHandler(BaseHTTPRequestHandler):
                 data['opportunities'] = scored_candidates[:5]
         except Exception as e:
             print("Error fetching opportunities for dashboard:", e)
-            
+
+        # Read-only freshness metadata for the current LOCAL state (never
+        # triggers sync, inference, or the daily pipeline).
+        data['freshness'] = collect_freshness_metadata()
+
         return data
 
     def do_GET(self):
@@ -499,7 +627,14 @@ class DashboardHandler(BaseHTTPRequestHandler):
             self.wfile.write(HTML_TEMPLATE.encode('utf-8'))
             
         elif self.path == '/api/data':
-            self.send_json(self.get_dashboard_data())
+            # Read-only snapshot; failures are surfaced to the UI instead of
+            # only appearing in server logs/console.
+            try:
+                self.send_json(self.get_dashboard_data())
+            except Exception as e:
+                self.send_json(
+                    {"error": f"Failed to load dashboard data: {e}"}, 500
+                )
             
         elif self.path.startswith('/api/prompt'):
             qs = urllib.parse.parse_qs(urllib.parse.urlparse(self.path).query)
