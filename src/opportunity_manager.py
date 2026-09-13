@@ -117,6 +117,25 @@ def communication_allows_implementation(issue_url):
     state = get_communication_state(issue_url)
     return bool(state and state["communication_status"] in {"APPROVED", "NOT_REQUIRED"})
 
+def mark_communication_sent(issue_url):
+    """Local acknowledgement that the approved comment was sent.
+
+    Human-controlled dashboard action: this only records local state
+    (APPROVED -> COMMENT_SENT). It does NOT verify or contact GitHub, and it
+    never posts comments, commits, branches, or PRs.
+    """
+    with get_connection() as conn:
+        cursor = conn.execute(
+            """
+            UPDATE issues
+            SET communication_status = 'COMMENT_SENT'
+            WHERE url = ? AND communication_status = 'APPROVED'
+            """,
+            (issue_url,),
+        )
+        conn.commit()
+        return cursor.rowcount == 1
+
 def generate_daily_shortlist(limit=10):
     with get_connection() as conn:
         cursor = conn.cursor()

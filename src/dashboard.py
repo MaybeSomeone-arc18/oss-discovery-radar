@@ -340,7 +340,7 @@ HTML_TEMPLATE = """<!DOCTYPE html>
         }
 
         function commBadgeClass(status) {
-            if (status === 'APPROVED' || status === 'NOT_REQUIRED') return 'status-success';
+            if (status === 'APPROVED' || status === 'NOT_REQUIRED' || status === 'COMMENT_SENT') return 'status-success';
             if (status === 'REJECTED') return 'status-danger';
             return 'status-warning';
         }
@@ -361,10 +361,13 @@ HTML_TEMPLATE = """<!DOCTYPE html>
             const approvedAt = state.approved_at || null;
             const reply = state.recommendation || '';
             const reason = state.reason || '';
+            let statusText = status;
+            if (status === 'APPROVED') statusText = 'Approved \u2014 comment not yet marked sent';
+            if (status === 'COMMENT_SENT') statusText = 'Comment marked sent';
             document.getElementById('modal-title').innerText = 'Communication Review \u00b7 ' + url;
             document.getElementById('modal-body').innerHTML = `
                 <div style="display:flex; gap:0.5rem; align-items:center; flex-wrap:wrap; margin-bottom:0.75rem;">
-                    <span class="status-badge ${commBadgeClass(status)}">${esc(status)}</span>
+                    <span class="status-badge ${commBadgeClass(status)}">${esc(statusText)}</span>
                     <span style="color:var(--text-muted); font-size:0.875rem;">Approved at: ${approvedAt ? esc(approvedAt) : 'not approved yet'}</span>
                 </div>
                 <div style="margin-bottom:0.5rem; font-weight:600;">Suggested maintainer reply (editable)</div>
@@ -374,6 +377,7 @@ HTML_TEMPLATE = """<!DOCTYPE html>
                 <div style="display:flex; gap:0.5rem; flex-wrap:wrap; margin-bottom:0.5rem;">
                     <button class="btn" id="comm-approve" onclick="commAction('${esc(url)}', 'approve')">Approve</button>
                     <button class="btn" id="comm-reject" onclick="commAction('${esc(url)}', 'reject')" style="background:var(--danger);">Reject</button>
+                    <button class="btn" id="comm-sent" onclick="commAction('${esc(url)}', 'mark-sent')" ${status === 'APPROVED' ? '' : 'disabled'} title="${status === 'APPROVED' ? 'Mark approved comment as sent (local only)' : 'Only available when status is APPROVED'}">Mark Comment Sent</button>
                     <button class="btn" id="comm-save" onclick="commAction('${esc(url)}', 'edit')" style="background:var(--surface-hover); color:var(--text);">Save Reply</button>
                 </div>
                 <div id="comm-result" style="font-size:0.875rem;"></div>
@@ -388,7 +392,7 @@ HTML_TEMPLATE = """<!DOCTYPE html>
         }
 
         async function commAction(url, action) {
-            const buttonIds = ['comm-approve', 'comm-reject', 'comm-save'];
+            const buttonIds = ['comm-approve', 'comm-reject', 'comm-save', 'comm-sent'];
             let resultEl = document.getElementById('comm-result');
             buttonIds.forEach(id => { const b = document.getElementById(id); if (b) b.disabled = true; });
             resultEl.style.color = 'var(--text-muted)';
@@ -410,6 +414,7 @@ HTML_TEMPLATE = """<!DOCTYPE html>
                 renderCommunicationModal(url, data.state);
                 const msg = action === 'approve' ? 'Approved \u2713'
                     : action === 'reject' ? 'Rejected \u2713'
+                    : action === 'mark-sent' ? 'Comment marked sent \u2713'
                     : 'Reply saved \u2713 (status reset to REVIEW_REQUIRED \u2014 approve again when ready)';
                 resultEl = document.getElementById('comm-result');
                 resultEl.style.color = 'var(--success)';
@@ -867,6 +872,7 @@ class DashboardHandler(BaseHTTPRequestHandler):
             reject_communication,
             set_communication_recommendation,
             get_communication_state,
+            mark_communication_sent,
         )
 
         if path == '/api/communication/approve':
@@ -877,6 +883,20 @@ class DashboardHandler(BaseHTTPRequestHandler):
             if not reject_communication(url, body.get('reason')):
                 self.send_json({"error": "Issue not found"}, 404)
                 return
+        elif path == '/api/communication/mark-sent':
+            # Local acknowledgement ONLY: human-confirmed that the approved
+            # comment was sent. Never verifies or contacts GitHub.
+            current = get_communication_state(url)
+            if not current:
+                self.send_json({"error": "Issue not found"}, 404)
+                return
+            if current.get("communication_status") != "APPROVED":
+                self.send_json({
+                    "error": "Only approved communication can be marked sent "
+                             f"(current status: {current.get('communication_status')})"
+                }, 409)
+                return
+            mark_communication_sent(url)
         elif path == '/api/communication/edit':
             recommendation = body.get('recommendation')
             if not recommendation or not str(recommendation).strip():

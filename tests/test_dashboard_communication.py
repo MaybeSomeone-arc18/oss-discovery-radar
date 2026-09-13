@@ -274,6 +274,125 @@ def test_edit_recommendation_requires_text(monkeypatch):
     assert "recommendation" in handler.payload["error"]
 
 
+# --- mark-sent action -------------------------------------------------------
+
+
+def test_mark_sent_from_approved_works(monkeypatch):
+    conn = make_conn()
+    seed_issue(conn, comm_status="APPROVED", approved_at="2025-01-03 10:00:00")
+    patch_local_db(monkeypatch, conn)
+
+    handler = make_post_handler("/api/communication/mark-sent", {"url": "http://test/1"})
+    DashboardHandler.do_POST(handler)
+
+    assert handler.status == 200
+    assert handler.payload["ok"] is True
+    assert handler.payload["state"]["status"] == "COMMENT_SENT"
+    state = current_comm_state(conn, "http://test/1")
+    assert state["status"] == "COMMENT_SENT"
+    # The approval timestamp is preserved for the human acknowledgement.
+    assert state["approved_at"] == "2025-01-03 10:00:00"
+
+
+def test_mark_sent_from_review_required_rejected(monkeypatch):
+    conn = make_conn()
+    seed_issue(conn, comm_status="REVIEW_REQUIRED")
+    patch_local_db(monkeypatch, conn)
+
+    handler = make_post_handler("/api/communication/mark-sent", {"url": "http://test/1"})
+    DashboardHandler.do_POST(handler)
+
+    assert handler.status == 409
+    assert "approved" in handler.payload["error"].lower()
+    assert current_comm_state(conn, "http://test/1")["status"] == "REVIEW_REQUIRED"
+
+
+def test_mark_sent_from_rejected_rejected(monkeypatch):
+    conn = make_conn()
+    seed_issue(conn, comm_status="REJECTED")
+    patch_local_db(monkeypatch, conn)
+
+    handler = make_post_handler("/api/communication/mark-sent", {"url": "http://test/1"})
+    DashboardHandler.do_POST(handler)
+
+    assert handler.status == 409
+    assert current_comm_state(conn, "http://test/1")["status"] == "REJECTED"
+
+
+def test_mark_sent_from_not_required_rejected(monkeypatch):
+    conn = make_conn()
+    seed_issue(conn, comm_status="NOT_REQUIRED")
+    patch_local_db(monkeypatch, conn)
+
+    handler = make_post_handler("/api/communication/mark-sent", {"url": "http://test/1"})
+    DashboardHandler.do_POST(handler)
+
+    assert handler.status == 409
+    assert current_comm_state(conn, "http://test/1")["status"] == "NOT_REQUIRED"
+
+
+def test_mark_sent_unknown_issue_404(monkeypatch):
+    conn = make_conn()
+    patch_local_db(monkeypatch, conn)
+
+    handler = make_post_handler("/api/communication/mark-sent", {"url": "http://nope/1"})
+    DashboardHandler.do_POST(handler)
+
+    assert handler.status == 404
+
+
+# --- edit/reject remain safe -------------------------------------------------
+
+
+def test_edit_after_sent_returns_to_review_required(monkeypatch):
+    conn = make_conn()
+    seed_issue(conn, comm_status="COMMENT_SENT", approved_at="2025-01-03 10:00:00")
+    patch_local_db(monkeypatch, conn)
+
+    handler = make_post_handler(
+        "/api/communication/edit",
+        {"url": "http://test/1", "recommendation": "Changed after sending."},
+    )
+    DashboardHandler.do_POST(handler)
+
+    assert handler.status == 200
+    state = current_comm_state(conn, "http://test/1")
+    assert state["recommendation"] == "Changed after sending."
+    assert state["status"] == "REVIEW_REQUIRED"
+    assert state["approved_at"] is None
+
+
+def test_edit_after_approved_returns_to_review_required(monkeypatch):
+    conn = make_conn()
+    seed_issue(conn, comm_status="APPROVED", approved_at="2025-01-03 10:00:00")
+    patch_local_db(monkeypatch, conn)
+
+    handler = make_post_handler(
+        "/api/communication/edit",
+        {"url": "http://test/1", "recommendation": "Reworded before sending."},
+    )
+    DashboardHandler.do_POST(handler)
+
+    assert handler.status == 200
+    state = current_comm_state(conn, "http://test/1")
+    assert state["status"] == "REVIEW_REQUIRED"
+    assert state["approved_at"] is None
+
+
+def test_reject_after_sent_still_rejects(monkeypatch):
+    conn = make_conn()
+    seed_issue(conn, comm_status="COMMENT_SENT")
+    patch_local_db(monkeypatch, conn)
+
+    handler = make_post_handler("/api/communication/reject", {"url": "http://test/1"})
+    DashboardHandler.do_POST(handler)
+
+    assert handler.status == 200
+    state = current_comm_state(conn, "http://test/1")
+    assert state["status"] == "REJECTED"
+    assert state["approved_at"] is None
+
+
 # --- POST-only actions ------------------------------------------------------
 
 
@@ -282,11 +401,12 @@ def test_communication_actions_are_post_only(monkeypatch):
     seed_issue(conn)
     patch_local_db(monkeypatch, conn)
 
-    handler = FakeHandler("/api/communication/approve")
-    DashboardHandler.do_GET(handler)
+    for path in ("/api/communication/approve", "/api/communication/mark-sent"):
+        handler = FakeHandler(path)
+        DashboardHandler.do_GET(handler)
 
-    assert handler.status == 405
-    assert ("Allow", "POST") in handler.response_headers
+        assert handler.status == 405
+        assert ("Allow", "POST") in handler.response_headers
 
 
 # --- input validation -------------------------------------------------------
@@ -338,12 +458,15 @@ def test_no_github_write_on_any_action(monkeypatch):
         )
 
     conn = make_conn()
-    seed_issue(conn)
+    # APPROVED so every action below -- including mark-sent -- is valid from
+    # its current state.
+    seed_issue(conn, comm_status="APPROVED")
     statements = []
     conn.set_trace_callback(lambda sql: statements.append(sql))
     patch_local_db(monkeypatch, conn)
 
     for path, body in (
+        ("/api/communication/mark-sent", {"url": "http://test/1"}),
         ("/api/communication/approve", {"url": "http://test/1"}),
         ("/api/communication/reject", {"url": "http://test/1"}),
         ("/api/communication/edit", {"url": "http://test/1", "recommendation": "New reply"}),
