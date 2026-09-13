@@ -156,9 +156,15 @@ def test_research_returns_false_when_issue_missing(mock_context, mock_verify):
 def test_plan_passes_selected_model_to_hermes(monkeypatch, tmp_path):
     from src.hermes_agent import plan
 
+    plan_calls = []
+
+    def fake_execution_plan(task_type="lightweight"):
+        plan_calls.append(task_type)
+        return (True, "llama3.2:3b", "validated")
+
     monkeypatch.setattr(
         "src.autonomous_guard.get_hermes_execution_plan",
-        lambda: (True, "llama3.2:3b", "validated"),
+        fake_execution_plan,
     )
     monkeypatch.setattr(
         "src.hermes_agent.get_issue_context",
@@ -186,6 +192,8 @@ def test_plan_passes_selected_model_to_hermes(monkeypatch, tmp_path):
     assert plan(123) is True
     assert captured["model"] == "llama3.2:3b"
     assert (tmp_path / "plan.md").read_text() == "[FACT] Plan"
+    # Issue has no engineering_depth -> ordinary planning stays lightweight.
+    assert plan_calls == ["lightweight"]
 
 
 @patch("src.hermes_agent.verify_local_provider")

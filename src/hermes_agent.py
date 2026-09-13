@@ -261,10 +261,26 @@ Known AI Policy Constraints: No AI-generated code push without human review.
 def plan(issue_id_or_url):
     from src.run_log import log_event
     print(f"Running Real Hermes Plan for Issue {issue_id_or_url}...")
+    issue = get_issue_context(issue_id_or_url)
+    if not issue:
+        print(f"Issue {issue_id_or_url} not found.")
+        log_event("hermes_plan", "failed", f"Issue {issue_id_or_url} not found", issue_id=issue_id_or_url if isinstance(issue_id_or_url, int) else None)
+        return False
+
+    # Explicitly classify difficult implementation planning (issues with
+    # SUBSTANTIAL engineering depth) as reasoning-heavy so it routes to
+    # OmniRoute when available; simple/unknown issues stay lightweight
+    # (llama3.2:3b). qwen3.5:9b is still never auto-selected by routing.
+    task_type = (
+        "heavy" if issue.get("engineering_depth") == "SUBSTANTIAL" else "lightweight"
+    )
+
     try:
         from src.autonomous_guard import get_hermes_execution_plan
 
-        execution_ok, selected_model, execution_reason = get_hermes_execution_plan()
+        execution_ok, selected_model, execution_reason = get_hermes_execution_plan(
+            task_type=task_type
+        )
         if not execution_ok:
             print(f"Plan deferred: {execution_reason}")
             log_event(
@@ -282,11 +298,6 @@ def plan(issue_id_or_url):
             f"Execution preflight failed: {e}",
             issue_id=issue_id_or_url if isinstance(issue_id_or_url, int) else None,
         )
-        return False
-    issue = get_issue_context(issue_id_or_url)
-    if not issue:
-        print(f"Issue {issue_id_or_url} not found.")
-        log_event("hermes_plan", "failed", f"Issue {issue_id_or_url} not found", issue_id=issue_id_or_url if isinstance(issue_id_or_url, int) else None)
         return False
 
     org = issue['org_slug']

@@ -82,6 +82,19 @@ def generate_reports(issue_id, worktree_path, reports_dir, test_results, diff_ou
     implementation_file = reports_dir / "implementation.md"
     summary_file = reports_dir / "summary.md"
 
+    # Final code review is reasoning-heavy: use the heavy route (OmniRoute
+    # when available, else the existing 3B fallback). When routing defers,
+    # fall back to the default local model exactly as before.
+    review_model = None
+    try:
+        execution_ok, selected_model, _execution_reason = get_hermes_execution_plan(
+            task_type="heavy"
+        )
+        if execution_ok:
+            review_model = selected_model
+    except Exception:
+        review_model = None
+
     # Generate Review
     review_prompt = f"""You are a code reviewer.
 Review the following local implementation diff and test results for Issue {issue_id}.
@@ -101,7 +114,7 @@ GIT DIFF:
 {diff_output[:10000]}
 """
     try:
-        review_response = run_hermes_oneshot(review_prompt, cwd=str(worktree_path), safe_mode=True)
+        review_response = run_hermes_oneshot(review_prompt, cwd=str(worktree_path), safe_mode=True, model=review_model)
         with open(review_file, "w") as f:
             f.write(review_response)
     except Exception as e:

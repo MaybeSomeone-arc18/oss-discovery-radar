@@ -60,7 +60,11 @@ def generate_communication_recommendation(issue_url):
     # and the recommended next step.
     communication_context = communication_context[:12000]
 
-    execution_ok, selected_model, execution_reason = get_hermes_execution_plan()
+    # Maintainer communication analysis is reasoning-heavy: use the heavy
+    # route (OmniRoute when available, else the existing 3B fallback).
+    execution_ok, selected_model, execution_reason = get_hermes_execution_plan(
+        task_type="heavy"
+    )
     if not execution_ok:
         raise RuntimeError(f"Hermes unavailable for communication analysis: {execution_reason}")
 
