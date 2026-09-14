@@ -260,12 +260,22 @@ def init_db():
             cursor.execute("ALTER TABLE issues ADD COLUMN readiness_status TEXT DEFAULT 'UNKNOWN'")
         if 'readiness_evidence' not in issue_columns:
             cursor.execute("ALTER TABLE issues ADD COLUMN readiness_evidence TEXT")
+        if 'gsoc_evidence' not in issue_columns:
+            cursor.execute("ALTER TABLE issues ADD COLUMN gsoc_evidence TEXT")
         
         # Anti-spam & Personal Learning
         if 'cooldown_until' not in issue_columns:
             cursor.execute("ALTER TABLE issues ADD COLUMN cooldown_until TIMESTAMP")
         if 'hermes_retry_at' not in issue_columns:
             cursor.execute("ALTER TABLE issues ADD COLUMN hermes_retry_at TIMESTAMP")
+        if 'communication_status' not in issue_columns:
+            cursor.execute("ALTER TABLE issues ADD COLUMN communication_status TEXT DEFAULT 'REVIEW_REQUIRED'")
+        if 'communication_recommendation' not in issue_columns:
+            cursor.execute("ALTER TABLE issues ADD COLUMN communication_recommendation TEXT")
+        if 'communication_reason' not in issue_columns:
+            cursor.execute("ALTER TABLE issues ADD COLUMN communication_reason TEXT")
+        if 'communication_approved_at' not in issue_columns:
+            cursor.execute("ALTER TABLE issues ADD COLUMN communication_approved_at TIMESTAMP")
         if 'user_difficulty' not in issue_columns:
             cursor.execute("ALTER TABLE issues ADD COLUMN user_difficulty TEXT")
         if 'user_notes' not in issue_columns:
@@ -443,18 +453,19 @@ def update_issue_opportunity(url, score, activity_status):
         
         conn.commit()
 
-def update_issue_deep_analysis(url, issue_quality, contribution_type, engineering_depth, gsoc_score, contribution_score):
+def update_issue_deep_analysis(url, issue_quality, contribution_type, engineering_depth, gsoc_score, contribution_score, gsoc_evidence=None):
     with get_connection() as conn:
         cursor = conn.cursor()
         cursor.execute('''
-        UPDATE issues SET 
-            issue_quality = ?,
+        UPDATE issues
+        SET issue_quality = ?,
             contribution_type = ?,
             engineering_depth = ?,
             gsoc_preparation_score = ?,
-            contribution_value_score = ?
+            contribution_value_score = ?,
+            gsoc_evidence = ?
         WHERE url = ?
-        ''', (issue_quality, contribution_type, engineering_depth, gsoc_score, contribution_score, url))
+        ''', (issue_quality, contribution_type, engineering_depth, gsoc_score, contribution_score, gsoc_evidence, url))
         conn.commit()
 
 def update_eligibility_status(url, eligibility_status):

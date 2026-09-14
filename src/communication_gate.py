@@ -1,8 +1,37 @@
+import re
 from pathlib import Path
 
-from src.autonomous_guard import get_hermes_execution_plan
-from src.hermes_agent import get_issue_context, get_reports_dir, run_hermes_oneshot
+from src.autonomous_guard import get_hermes_execution_handoff
+from src.hermes_agent import (
+    _oneshot_provider_kwargs,
+    get_issue_context,
+    get_reports_dir,
+    run_hermes_oneshot,
+)
 from src.opportunity_manager import set_communication_recommendation
+
+# Any line that starts an H1, H2, or H3 Markdown heading. Used to find the
+# section boundary after a matched heading; never matches H4+ ("####"),
+# headings without the required space ("#Heading"), or indented lines.
+_SECTION_HEADING_RE = re.compile(r"^#{1,3} [^\n]+$", re.MULTILINE)
+
+
+def _extract_section(research_content, name):
+    """Extract a Markdown section by its H1, H2, or H3 heading.
+
+    Only valid headings are recognized: one to three leading hashes followed
+    by a space and the exact section name on its own line. The section runs
+    to the next H1/H2/H3 heading or the end of the document.
+    """
+    pattern = r"^#{1,3} " + re.escape(name) + r"[ \t]*$"
+    heading = re.compile(pattern, re.MULTILINE)
+    match = heading.search(research_content)
+    if not match:
+        return ""
+    start = match.end()
+    next_heading = _SECTION_HEADING_RE.search(research_content, start)
+    end = next_heading.start() if next_heading else len(research_content)
+    return research_content[start:end].strip()
 
 
 def _get_research_file(issue):
@@ -27,17 +56,6 @@ def generate_communication_recommendation(issue_url):
     if not research_content:
         raise RuntimeError(f"Research report is empty: {research_file}")
 
-    def extract_section(name):
-        marker = f"## {name}"
-        start = research_content.find(marker)
-        if start == -1:
-            return ""
-        start += len(marker)
-        end = research_content.find("\n## ", start)
-        if end == -1:
-            end = len(research_content)
-        return research_content[start:end].strip()
-
     relevant_sections = []
     for name in (
         "Questions for Maintainers",
@@ -45,7 +63,7 @@ def generate_communication_recommendation(issue_url):
         "Constraints",
         "Unknowns",
     ):
-        content = extract_section(name)
+        content = _extract_section(research_content, name)
         if content:
             relevant_sections.append(f"## {name}\n{content}")
 
@@ -61,9 +79,10 @@ def generate_communication_recommendation(issue_url):
     communication_context = communication_context[:12000]
 
     # Maintainer communication analysis is reasoning-heavy: use the heavy
-    # route (OmniRoute when available, else the existing 3B fallback).
-    execution_ok, selected_model, execution_reason = get_hermes_execution_plan(
-        task_type="heavy"
+    # route (OmniRoute when available, else the existing 3B fallback). When
+    # routing defers, raise exactly as before.
+    execution_ok, selected_model, execution_reason, provider_config = (
+        get_hermes_execution_handoff(task_type="heavy")
     )
     if not execution_ok:
         raise RuntimeError(f"Hermes unavailable for communication analysis: {execution_reason}")
@@ -123,6 +142,7 @@ COMMUNICATION-RELEVANT RESEARCH:
         prompt,
         safe_mode=True,
         model=selected_model,
+        **_oneshot_provider_kwargs(provider_config),
     ).strip()
 
     if not response:

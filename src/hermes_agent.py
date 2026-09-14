@@ -1,5 +1,6 @@
 import os
 import json
+import shutil
 import yaml
 import subprocess
 from pathlib import Path
@@ -96,6 +97,17 @@ def get_issue_context(issue_id):
         columns = [col[0] for col in cursor.description]
         return dict(zip(columns, row))
 
+def get_issue_context_by_url(issue_url):
+    with get_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute("SELECT * FROM issues WHERE url = ?", (issue_url,))
+        row = cursor.fetchone()
+        if not row:
+            return None
+        columns = [col[0] for col in cursor.description]
+        return dict(zip(columns, row))
+
+
 def get_repo_analysis(repo_name):
     with get_connection() as conn:
         cursor = conn.cursor()
@@ -111,17 +123,195 @@ def get_reports_dir(org, repo, issue_id):
     reports_dir.mkdir(parents=True, exist_ok=True)
     return reports_dir
 
-def run_hermes_oneshot(prompt, cwd=None, safe_mode=False, model=None):
+def _hermes_runtime_home():
+    """Workspace-local Hermes runtime home for the sandboxed child process.
+
+    The DSH execution sandbox (workspace-write) only lets Hermes write under
+    the session workspace, so ``~/.hermes/logs`` is EPERM for the child. By
+    pointing HERMES_HOME into a workspace-local directory, Hermes keeps its
+    logs/state under the writable root while preserving its provider/model
+    behavior via the mirrored config.yaml below. Sandbox mode is unchanged.
+    """
+    return Path(__file__).resolve().parents[1] / ".hermes-runtime"
+
+
+def _prepare_hermes_child_env():
+    """Environment for the Hermes child process.
+
+    Redirects HERMES_HOME to a workspace-local runtime directory and seeds it
+    with the user's provider/model config (llama3.2:3b + custom/Ollama). Only
+    config.yaml is mirrored — .env / auth.json (credentials) are never copied
+    into the workspace.
+    """
+    runtime_home = _hermes_runtime_home()
+    runtime_home.mkdir(parents=True, exist_ok=True)
+
+    source_config = Path(os.path.expanduser("~/.hermes/config.yaml"))
+    if source_config.exists():
+        shutil.copyfile(source_config, runtime_home / "config.yaml")
+
+    child_env = os.environ.copy()
+    child_env["HERMES_HOME"] = str(runtime_home)
+    return child_env
+
+def _inject_provider_entry(runtime_home, *, provider_id, model, base_url, api_key_env):
+    """Register an endpoint-bearing execution provider in the mirrored runtime config.
+
+    Adds a ``providers.<provider_id>`` entry to the workspace-local
+    ``.hermes-runtime/config.yaml`` (the app-owned mirror of ``~/.hermes/config.yaml``)
+    so the Hermes child can resolve it as a named custom provider via
+    ``--provider <provider_id>``, and rewrites the root ``model:`` section to the
+    same execution provider so the child config never points at a stale local
+    endpoint. Only the provider identity, the endpoint URL, and the ENVIRONMENT
+    VARIABLE NAME of its credential are written — the credential VALUE is never
+    persisted; Hermes reads it at runtime from ``api_key_env`` in the inherited
+    process environment.
+    """
+    import yaml
+
+    config_path = Path(runtime_home) / "config.yaml"
+    data = {}
+    if config_path.exists():
+        with open(config_path, "r") as f:
+            data = yaml.safe_load(f) or {}
+
+    providers = data.get("providers")
+    if not isinstance(providers, dict):
+        providers = {}
+        data["providers"] = providers
+
+    entry = {
+        "name": provider_id,
+        "api": base_url,
+        "key_env": api_key_env,
+        "enabled": True,
+    }
+    if model:
+        entry["default_model"] = model
+    providers[provider_id] = entry
+
+    # Rewrite the root ``model:`` section to the execution provider as well.
+    # The mirrored config otherwise still names the local/custom (Ollama)
+    # endpoint from ~/.hermes/config.yaml; ``--provider`` overrides it at
+    # runtime, but leaving a stale local base_url in the child config is what
+    # previously sent ``auto/coding:free`` to Ollama. A provider-handoff run
+    # must carry a single, unambiguous provider: the endpoint URL and the env
+    # var NAME of the credential, never the credential value.
+    root_model = {
+        "provider": provider_id,
+        "base_url": base_url,
+    }
+    if model:
+        root_model["default"] = model
+    data["model"] = root_model
+
+    with open(config_path, "w") as f:
+        yaml.safe_dump(data, f, sort_keys=False)
+
+
+def _classify_hermes_failure(stderr_text):
+    """Return (kind, user_message) for known Hermes/provider failure modes.
+
+    Used by run_hermes_oneshot() so a child that exits (or is killed at the
+    outer 900s timeout) with a clear provider/model error surfaces the actual
+    stderr instead of a generic message. Returns None when the output does not
+    match any known failure signature.
+    """
+    err = (stderr_text or "").lower()
+    if not err.strip():
+        return None
+    if any(
+        m in err
+        for m in (
+            "connection refused",
+            "connection reset",
+            "unreachable",
+            "could not connect",
+            "failed to connect",
+            "name or service not known",
+        )
+    ):
+        return (
+            "unreachable",
+            "Inference provider unreachable. Check that the active provider endpoint is running.",
+        )
+    if (
+        "404" in err
+        or "model not found" in err
+        or "not available" in err
+        or ("model" in err and "not found" in err)
+        or "does not exist" in err
+    ):
+        return (
+            "model",
+            "Model unavailable on the active provider. Make sure the requested model is served.",
+        )
+    if any(
+        m in err
+        for m in ("401", "403", "unauthorized", "invalid api key", "authentication failed", "forbidden")
+    ):
+        return (
+            "auth",
+            "Inference provider authentication failed. Check the active provider's API key/credential.",
+        )
+    if "context length" in err or "context too small" in err or "context window" in err:
+        return (
+            "context",
+            "Context too small. Adjust config or model parameters.",
+        )
+    return None
+
+
+def run_hermes_oneshot(
+    prompt,
+    cwd=None,
+    safe_mode=False,
+    model=None,
+    *,
+    provider_id=None,
+    base_url=None,
+    api_key_env=None,
+):
+    """Run a single Hermes prompt in a sandboxed child process.
+
+    Lightweight/local calls keep the historical invocation unchanged:
+    ``hermes -z <prompt> [--model <model>]`` against the configured
+    local/custom (Ollama) provider.
+
+    When an explicit execution-provider configuration is supplied
+    (``provider_id`` + ``base_url`` + ``api_key_env``), the provider is registered
+    as a named custom provider inside the mirrored .hermes-runtime config and the
+    invocation becomes ``hermes -z <prompt> --model <model> --provider <provider_id>``.
+    The credential is never placed on the command line or written to config: the
+    child reads it from the ``api_key_env`` environment variable at runtime,
+    inherited from the Radar process environment via os.environ.copy().
+    """
     cmd = ["hermes", "-z", prompt]
     if model:
         cmd.extend(["--model", model])
-    # Removed --safe-mode because it ignores ~/.hermes/config.yaml and disables custom_providers
+
+    child_env = _prepare_hermes_child_env()
+    if provider_id:
+        if not base_url or not api_key_env:
+            raise ValueError(
+                "provider_id requires base_url and api_key_env for a provider handoff"
+            )
+        _inject_provider_entry(
+            child_env["HERMES_HOME"],
+            provider_id=provider_id,
+            model=model,
+            base_url=base_url,
+            api_key_env=api_key_env,
+        )
+        cmd.extend(["--provider", provider_id])
+
     try:
         kwargs = {
             "cwd": cwd,
             "capture_output": True,
             "text": True,
             "timeout": 900,
+            "env": child_env,
         }
         if os.name == "posix":
             kwargs["start_new_session"] = True
@@ -129,19 +319,11 @@ def run_hermes_oneshot(prompt, cwd=None, safe_mode=False, model=None):
         result = subprocess.run(cmd, **kwargs)
 
         if result.returncode != 0:
-            err = result.stderr.lower()
-            if "connection refused" in err or "unreachable" in err or "connect" in err:
+            failure = _classify_hermes_failure(result.stderr)
+            if failure is not None:
+                _kind, message = failure
                 raise RuntimeError(
-                    f"Ollama/Hermes provider unreachable. Check if ollama serve is running.\n"
-                    f"Details: {result.stderr}"
-                )
-            if "model not found" in err or "not available" in err:
-                raise RuntimeError(
-                    f"Model unavailable. Make sure llama3.2:3b is pulled.\nDetails: {result.stderr}"
-                )
-            if "context length" in err or "context too small" in err:
-                raise RuntimeError(
-                    f"Context too small. Adjust config or model parameters.\nDetails: {result.stderr}"
+                    f"{message}\nDetails: {result.stderr}"
                 )
             raise RuntimeError(
                 f"Hermes CLI failed with code {result.returncode}:\n{result.stderr}"
@@ -152,7 +334,24 @@ def run_hermes_oneshot(prompt, cwd=None, safe_mode=False, model=None):
             raise RuntimeError("Malformed output: Hermes CLI returned empty response.")
         return out
 
-    except subprocess.TimeoutExpired:
+    except subprocess.TimeoutExpired as exc:
+        # Surface a real provider/model error when the child left one in the
+        # captured output before the outer 900s safety limit killed it; keep
+        # 900s as the outer limit (do not raise it).
+        partial_stderr = getattr(exc, "stderr", None)
+        if isinstance(partial_stderr, bytes):
+            partial_stderr = partial_stderr.decode(errors="replace")
+        failure = _classify_hermes_failure(partial_stderr)
+        if failure is not None:
+            _kind, message = failure
+            snippet = (partial_stderr or "").strip()[-1500:]
+            raise RuntimeError(
+                "Hermes CLI hit the 900-second safety timeout, but the provider "
+                f"reported a failure before that: {message}\n"
+                f"Captured stderr: {snippet}\n"
+                "The 900s timeout is the outer safety net; the provider error above "
+                "is why execution could not complete."
+            )
         raise RuntimeError(
             "Hermes CLI timed out after 900 seconds. Model execution might be stuck or too slow."
         )
@@ -267,19 +466,15 @@ def plan(issue_id_or_url):
         log_event("hermes_plan", "failed", f"Issue {issue_id_or_url} not found", issue_id=issue_id_or_url if isinstance(issue_id_or_url, int) else None)
         return False
 
-    # Explicitly classify difficult implementation planning (issues with
-    # SUBSTANTIAL engineering depth) as reasoning-heavy so it routes to
-    # OmniRoute when available; simple/unknown issues stay lightweight
-    # (llama3.2:3b). qwen3.5:9b is still never auto-selected by routing.
-    task_type = (
-        "heavy" if issue.get("engineering_depth") == "SUBSTANTIAL" else "lightweight"
-    )
+    # Planning is a reasoning-heavy task: use OmniRoute when available,
+    # otherwise safe llama3.2:3b fallback. qwen3.5:9b is never auto-selected.
+    task_type = "heavy"
 
     try:
-        from src.autonomous_guard import get_hermes_execution_plan
+        from src.autonomous_guard import get_hermes_execution_handoff
 
-        execution_ok, selected_model, execution_reason = get_hermes_execution_plan(
-            task_type=task_type
+        execution_ok, selected_model, execution_reason, provider_config = (
+            get_hermes_execution_handoff(task_type=task_type)
         )
         if not execution_ok:
             print(f"Plan deferred: {execution_reason}")
@@ -340,7 +535,12 @@ Output ONLY the Markdown plan.
 """
 
     try:
-        response = run_hermes_oneshot(prompt, safe_mode=True, model=selected_model)
+        response = run_hermes_oneshot(
+            prompt,
+            safe_mode=True,
+            model=selected_model,
+            **_oneshot_provider_kwargs(provider_config),
+        )
 
         with open(plan_file, "w") as f:
             f.write(response)
@@ -353,7 +553,24 @@ Output ONLY the Markdown plan.
         log_event("hermes_plan", "failed", f"Plan failed: {str(e)}", issue_id=issue_number if 'issue_number' in locals() else None)
         return False
 
-def implement_issue_with_hermes(worktree_path, context, model=None):
+def _oneshot_provider_kwargs(provider_config):
+    """Map an execution-provider handoff dict onto run_hermes_oneshot() kwargs.
+
+    Returns {} for the local/lightweight path so existing calls stay byte-identical.
+    The config dict comes from get_hermes_execution_handoff() /
+    get_omniroute_hermes_provider_config() and carries {provider_id, base_url,
+    api_key_env} — never the credential value.
+    """
+    if not provider_config:
+        return {}
+    return {
+        "provider_id": provider_config.get("provider_id"),
+        "base_url": provider_config.get("base_url"),
+        "api_key_env": provider_config.get("api_key_env"),
+    }
+
+
+def implement_issue_with_hermes(worktree_path, context, model=None, provider_config=None):
     print(f"Running Hermes implementation in {worktree_path}...")
     try:
         verify_local_provider()
@@ -370,17 +587,62 @@ CRITICAL SAFETY INSTRUCTIONS:
 - Inspect the existing implementation before changing it.
 - Use repository conventions.
 
+CRITICAL IMPLEMENTATION INSTRUCTIONS:
+- Work inside the provided isolated worktree (your current working directory). Never modify any other location.
+- Inspect the existing code first: find and read the relevant files, then create/modify exactly the files required by the issue.
+- You MUST directly create and edit files inside the current working directory (the isolated worktree).
+- Use shell commands to write files (for example: cat > path/to/file << 'ENDOFFILE' ... ENDOFFILE), or the file tool if available.
+- After making changes, run `git diff` and `git status` to verify exactly which files were modified.
+- Do NOT output patches or descriptions instead of editing files — you MUST apply the changes to the filesystem.
+- Add/update tests where appropriate.
+
 CONTEXT:
 {context}
 
-Please implement the change locally in the current directory and explain your assumptions. Add/update tests where appropriate.
-If you don't have tools to apply changes, output the full file modifications or patches so they can be reviewed.
+Implement the change directly in the current directory by writing the modified files using shell commands, then verify with `git diff` before finishing. If you cannot write files, stop and say so explicitly — outputting a description or patch instead of applied edits is NOT an acceptable implementation.
 """
 
-    response = run_hermes_oneshot(prompt, cwd=str(worktree_path), safe_mode=True, model=model)
+    response = run_hermes_oneshot(
+        prompt,
+        cwd=str(worktree_path),
+        safe_mode=True,
+        model=model,
+        **_oneshot_provider_kwargs(provider_config),
+    )
+
+    # Post-execution verification: confirm the worktree was actually modified.
+    # This catches the case where the agent described changes instead of applying
+    # them, failing fast before the guardrail stage rather than falsely reporting
+    # "Hermes applied initial implementation."
+    try:
+        status = subprocess.run(
+            ["git", "status", "--porcelain"],
+            cwd=str(worktree_path),
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+    except subprocess.CalledProcessError as e:
+        # Only tolerate a directory that is simply not a git repository (e.g.
+        # unit tests using a bare tmp dir). Any other git failure means we
+        # cannot verify the edit at all, so fail clearly instead of pretending
+        # the response was an applied implementation.
+        if "not a git repository" not in e.stderr.lower():
+            raise RuntimeError(
+                "Could not verify worktree edits after implementation: "
+                f"{e.stderr.strip() or 'git status failed'}"
+            ) from e
+    else:
+        if not status.stdout.strip():
+            raise RuntimeError(
+                "Implementation agent returned successfully but no files were "
+                "modified in the worktree. The agent likely output a description "
+                "instead of directly editing files."
+            )
+
     return response
 
-def repair_issue_with_hermes(worktree_path, context, failure_logs, model=None):
+def repair_issue_with_hermes(worktree_path, context, failure_logs, model=None, provider_config=None):
     print(f"Running Hermes repair loop in {worktree_path}...")
 
     prompt = f"""You are a repair agent. The previous implementation for the issue failed validation.
@@ -394,5 +656,11 @@ FAILURE LOGS:
 Please fix the implementation locally. Make the smallest maintainable change to pass the tests. Explain your assumptions.
 """
 
-    response = run_hermes_oneshot(prompt, cwd=str(worktree_path), safe_mode=True, model=model)
+    response = run_hermes_oneshot(
+        prompt,
+        cwd=str(worktree_path),
+        safe_mode=True,
+        model=model,
+        **_oneshot_provider_kwargs(provider_config),
+    )
     return response

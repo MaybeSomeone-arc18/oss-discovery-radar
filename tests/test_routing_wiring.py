@@ -1,12 +1,13 @@
 """Focused tests for the production wiring of the task-aware routing layer.
 
 Proves the routing layer (src.autonomous_guard.select_execution_provider +
-src.omniroute) is wired at the explicit reasoning-heavy decision points only:
+src.omniroute) is wired at the explicit decision points only:
   a. communication/maintainer analysis invokes the heavy route
-  b. difficult implementation planning invokes the heavy route
+  b. implementation planning invokes the heavy route
   c. final code review invokes the heavy route
-  d. ordinary research remains lightweight
-  e. no other existing callers accidentally become heavy
+  d. implementation execution invokes the tool-required route
+  e. ordinary research remains lightweight
+  f. no other existing callers accidentally change task class
 """
 
 import pytest
@@ -16,6 +17,16 @@ from src.autonomous_guard import validate_hermes_execution
 from src.communication_gate import generate_communication_recommendation
 from src.hermes_agent import plan, research
 from src.implementer import generate_reports, implement
+
+# Explicit execution-provider handoff produced by the routing layer for a
+# successful tool-required implementation (carries the env var NAME, never the
+# credential value).
+HANDOFF = {
+    "provider_id": "omniroute",
+    "base_url": "http://127.0.0.1:20128/v1",
+    "api_key_env": "OMNIROUTE_API_KEY",
+    "model": "auto/coding:free",
+}
 
 ISSUE_BASE = {
     "url": "http://test/5",
@@ -43,10 +54,10 @@ def test_communication_analysis_invokes_heavy_route(monkeypatch, tmp_path):
 
     def fake_plan(task_type="lightweight"):
         calls.append(task_type)
-        return (True, "auto/coding:free", "validated")
+        return (True, "auto/coding:free", "validated", None)
 
     monkeypatch.setattr(
-        "src.communication_gate.get_hermes_execution_plan", fake_plan
+        "src.communication_gate.get_hermes_execution_handoff", fake_plan
     )
     monkeypatch.setattr(
         "src.communication_gate.get_issue_context",
@@ -98,10 +109,10 @@ def test_difficult_planning_invokes_heavy_route(monkeypatch, tmp_path):
 
     def fake_plan(task_type="lightweight"):
         calls.append(task_type)
-        return (True, "auto/coding:free", "validated")
+        return (True, "auto/coding:free", "validated", None)
 
     monkeypatch.setattr(
-        "src.autonomous_guard.get_hermes_execution_plan", fake_plan
+        "src.autonomous_guard.get_hermes_execution_handoff", fake_plan
     )
     monkeypatch.setattr(
         "src.hermes_agent.get_issue_context",
@@ -122,15 +133,15 @@ def test_difficult_planning_invokes_heavy_route(monkeypatch, tmp_path):
     assert (tmp_path / "plan.md").read_text() == "[FACT] Plan"
 
 
-def test_trivial_planning_stays_lightweight(monkeypatch, tmp_path):
+def test_planning_now_always_heavy(monkeypatch, tmp_path):
     calls = []
 
     def fake_plan(task_type="lightweight"):
         calls.append(task_type)
-        return (True, "llama3.2:3b", "validated")
+        return (True, "auto/coding:free", "validated", None)
 
     monkeypatch.setattr(
-        "src.autonomous_guard.get_hermes_execution_plan", fake_plan
+        "src.autonomous_guard.get_hermes_execution_handoff", fake_plan
     )
     monkeypatch.setattr(
         "src.hermes_agent.get_issue_context",
@@ -147,7 +158,8 @@ def test_trivial_planning_stays_lightweight(monkeypatch, tmp_path):
     )
 
     assert plan(5) is True
-    assert calls == ["lightweight"]
+    # Planning is now always heavy, regardless of engineering_depth
+    assert calls == ["heavy"]
 
 
 # --- c. final code review -> heavy ------------------------------------------
@@ -158,10 +170,10 @@ def test_final_review_invokes_heavy_route(monkeypatch, tmp_path):
 
     def fake_plan(task_type="lightweight"):
         calls.append(task_type)
-        return (True, "auto/coding:free", "validated")
+        return (True, "auto/coding:free", "validated", None)
 
     monkeypatch.setattr(
-        "src.implementer.get_hermes_execution_plan", fake_plan
+        "src.implementer.get_hermes_execution_handoff", fake_plan
     )
     run_calls = []
 
@@ -193,10 +205,10 @@ def test_final_review_falls_back_to_default_when_heavy_unavailable(
 
     def fake_plan(task_type="lightweight"):
         calls.append(task_type)
-        return (False, None, "deferred")
+        return (False, None, "deferred", None)
 
     monkeypatch.setattr(
-        "src.implementer.get_hermes_execution_plan", fake_plan
+        "src.implementer.get_hermes_execution_handoff", fake_plan
     )
     run_calls = []
 
@@ -219,6 +231,45 @@ def test_final_review_falls_back_to_default_when_heavy_unavailable(
     # Routing deferred -> review falls back to the default local model.
     assert run_calls[0]["model"] is None
     assert (tmp_path / "review.md").read_text() == "[FACT] Review"
+
+
+# --- d'. implementation execution -> tool-required route ----------------------
+
+
+def test_implement_preflight_uses_implementation_routing(monkeypatch, tmp_path):
+    calls = []
+
+    def fake_plan(**kwargs):
+        calls.append(kwargs)
+        return (True, "auto/coding:free", "validated", HANDOFF)
+
+    monkeypatch.setattr(
+        "src.implementer.get_hermes_execution_handoff", fake_plan
+    )
+    monkeypatch.setattr(
+        "src.implementer.get_issue_context",
+        lambda issue_id: dict(ISSUE_BASE, issue_number=999),
+    )
+    monkeypatch.setattr(
+        "src.implementer.requests.get",
+        lambda *args, **kwargs: type(
+            "Response",
+            (),
+            {"status_code": 200, "json": lambda self: {"title": "Test issue"}},
+        )(),
+    )
+    monkeypatch.setattr(
+        "src.implementer.get_reports_dir", lambda *args: tmp_path
+    )
+    # No plan.md -> implement() returns right after the execution preflight.
+
+    success, test_results, diff_stat = implement(999)
+
+    assert success is False
+    assert test_results is None
+    # Implementation now requests the tool-required execution route, never the
+    # lightweight default (llama3.2:3b is not a tool-calling executor here).
+    assert calls == [{"task_type": "implementation"}]
 
 
 # --- d. ordinary research remains lightweight --------------------------------
@@ -255,7 +306,7 @@ def test_ordinary_research_stays_lightweight(monkeypatch, tmp_path):
     assert calls == [{}]
 
 
-# --- e. no other existing callers accidentally become heavy ------------------
+# --- e. no other callers accidentally change task class ----------------------
 
 
 def test_validate_hermes_execution_stays_lightweight(monkeypatch):
@@ -273,38 +324,4 @@ def test_validate_hermes_execution_stays_lightweight(monkeypatch):
 
     assert ok is True
     assert "validated" in reason
-    assert calls == [{}]
-
-
-def test_implement_preflight_stays_lightweight(monkeypatch, tmp_path):
-    calls = []
-
-    def fake_plan(**kwargs):
-        calls.append(kwargs)
-        return (True, "llama3.2:3b", "validated")
-
-    monkeypatch.setattr(
-        "src.implementer.get_hermes_execution_plan", fake_plan
-    )
-    monkeypatch.setattr(
-        "src.implementer.get_issue_context",
-        lambda issue_id: dict(ISSUE_BASE, issue_number=999),
-    )
-    monkeypatch.setattr(
-        "src.implementer.requests.get",
-        lambda *args, **kwargs: type(
-            "Response",
-            (),
-            {"status_code": 200, "json": lambda self: {"title": "Test issue"}},
-        )(),
-    )
-    monkeypatch.setattr(
-        "src.implementer.get_reports_dir", lambda *args: tmp_path
-    )
-    # No plan.md -> implement() returns right after the execution preflight.
-
-    success, test_results, diff_stat = implement(999)
-
-    assert success is False
-    assert test_results is None
     assert calls == [{}]

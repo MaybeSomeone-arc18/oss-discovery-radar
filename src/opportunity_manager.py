@@ -115,7 +115,7 @@ def reject_communication(issue_url, reason=None):
 
 def communication_allows_implementation(issue_url):
     state = get_communication_state(issue_url)
-    return bool(state and state["communication_status"] in {"APPROVED", "NOT_REQUIRED"})
+    return bool(state and state["communication_status"] in {"APPROVED", "NOT_REQUIRED", "COMMENT_SENT"})
 
 def mark_communication_sent(issue_url):
     """Local acknowledgement that the approved comment was sent.

@@ -5,10 +5,10 @@ import subprocess
 import yaml
 from pathlib import Path
 from src.workspace_manager import create_worktree, cleanup_worktree, WORKSPACES_ROOT
-from src.hermes_agent import get_issue_context, get_issue_context_by_url, get_reports_dir, implement_issue_with_hermes, repair_issue_with_hermes, run_hermes_oneshot
+from src.hermes_agent import get_issue_context, get_issue_context_by_url, get_reports_dir, implement_issue_with_hermes, repair_issue_with_hermes, run_hermes_oneshot, _oneshot_provider_kwargs
 from src.sandbox_runner import discover_and_run_tests
 from src.opportunity_manager import transition_status
-from src.autonomous_guard import get_hermes_execution_plan
+from src.autonomous_guard import get_hermes_execution_handoff
 
 def get_agent_config():
     config_path = Path("config/agent.yaml")
@@ -68,11 +68,25 @@ def check_diff_guardrails(worktree_path):
 def create_patch(worktree_path, output_path):
     output_path.parent.mkdir(parents=True, exist_ok=True)
     try:
-        # Add all to index to capture new files
-        subprocess.run(["git", "add", "-A"], cwd=str(worktree_path), check=True)
+        # Capture tracked files (staged and unstaged) without mutating index
         proc = subprocess.run(["git", "diff", "HEAD"], cwd=str(worktree_path), capture_output=True, text=True, check=True)
+        diff_text = proc.stdout
+        
+        # Manually append untracked files
+        proc_untracked = subprocess.run(["git", "ls-files", "--others", "--exclude-standard"], cwd=str(worktree_path), capture_output=True, text=True, check=True)
+        for f in proc_untracked.stdout.strip().split('\n'):
+            if not f: continue
+            file_path = worktree_path / f
+            if file_path.is_file():
+                diff_text += f"\n--- /dev/null\n+++ b/{f}\n@@ -0,0 +1 @@\n"
+                try:
+                    with open(file_path, 'r', errors='replace') as uf:
+                        diff_text += "".join(f"+{line}" for line in uf)
+                except Exception:
+                    pass
+
         with open(output_path, "w") as f:
-            f.write(proc.stdout)
+            f.write(diff_text)
         return True
     except subprocess.CalledProcessError:
         return False
@@ -86,12 +100,14 @@ def generate_reports(issue_id, worktree_path, reports_dir, test_results, diff_ou
     # when available, else the existing 3B fallback). When routing defers,
     # fall back to the default local model exactly as before.
     review_model = None
+    review_provider = None
     try:
-        execution_ok, selected_model, _execution_reason = get_hermes_execution_plan(
-            task_type="heavy"
+        execution_ok, selected_model, _execution_reason, provider_config = (
+            get_hermes_execution_handoff(task_type="heavy")
         )
         if execution_ok:
             review_model = selected_model
+            review_provider = provider_config
     except Exception:
         review_model = None
 
@@ -114,7 +130,13 @@ GIT DIFF:
 {diff_output[:10000]}
 """
     try:
-        review_response = run_hermes_oneshot(review_prompt, cwd=str(worktree_path), safe_mode=True, model=review_model)
+        review_response = run_hermes_oneshot(
+            review_prompt,
+            cwd=str(worktree_path),
+            safe_mode=True,
+            model=review_model,
+            **_oneshot_provider_kwargs(review_provider),
+        )
         with open(review_file, "w") as f:
             f.write(review_response)
     except Exception as e:
@@ -126,7 +148,15 @@ GIT DIFF:
 Describe the approach taken, files changed, tests added, validation results, and any remaining uncertainty.
 Do not generate the patch, just describe it.
 
+CRITICAL INSTRUCTIONS:
+- Describe ONLY what is supported by the provided diff and test results. Do not invent files, behavior, or changes.
+- Distinguish [FACT], [INFERENCE], and [UNCERTAINTY].
+- If the diff is empty, state explicitly that no changes were made.
+
 TEST RESULTS: {json.dumps(test_results, indent=2) if test_results else "None"}
+
+GIT DIFF:
+{diff_output[:10000] if diff_output.strip() else "Empty diff. No files changed."}
 """
     try:
         imp_response = run_hermes_oneshot(imp_prompt, cwd=str(worktree_path), safe_mode=True)
@@ -191,7 +221,9 @@ def implement(issue_id_or_url):
         print(f"Safeguard error: Could not verify issue against GitHub: {e}")
         return False, None, ""
 
-    execution_ok, selected_model, execution_reason = get_hermes_execution_plan()
+    execution_ok, selected_model, execution_reason, execution_provider = (
+        get_hermes_execution_handoff(task_type="implementation")
+    )
     if not execution_ok:
         print(f"Implementation deferred: {execution_reason}")
         return False, None, ""
@@ -254,6 +286,7 @@ def implement(issue_id_or_url):
             worktree_path,
             context,
             model=selected_model,
+            provider_config=execution_provider,
         )
         print("Hermes applied initial implementation.")
     except Exception as e:
@@ -300,6 +333,7 @@ def implement(issue_id_or_url):
                     context,
                     failure_logs,
                     model=selected_model,
+                    provider_config=execution_provider,
                 )
             except Exception as e:
                 print(f"Repair error: {e}")

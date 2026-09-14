@@ -484,3 +484,48 @@ def test_existing_events_digest_opportunities_unchanged(monkeypatch):
     assert data["events"][0]["result"] == "success"
     assert data["opportunities"][0]["score"] == 90.0
     assert data["opportunities"][0]["repo"] == "test/repo"
+def test_api_radar_start_endpoint_triggers_run_daily(monkeypatch):
+    """POST /api/radar/start triggers cmd_run_daily in a background process."""
+    import subprocess
+    mock_popen = MagicMock()
+    monkeypatch.setattr(subprocess, "Popen", mock_popen)
+    
+    handler = CapturingHandler("/api/radar/start")
+    handler.headers = {"Content-Length": "2"}
+    handler.rfile = MagicMock()
+    handler.rfile.read.return_value = b"{}"
+    
+    DashboardHandler.do_POST(handler)
+    
+    assert handler.status == 200
+    mock_popen.assert_called_once()
+    args, kwargs = mock_popen.call_args
+    assert "main.py" in args[0]
+    assert "run-daily" in args[0]
+
+def test_api_radar_start_endpoint_post_only(monkeypatch):
+    """GET /api/radar/start is not allowed (method safety)."""
+    handler = CapturingHandler("/api/radar/start")
+    DashboardHandler.do_GET(handler)
+    
+    # 404 or 405 depending on implementation. In our case we didn't add it to do_GET so it falls through to 404.
+    assert handler.status == 404
+
+def test_dashboard_data_includes_active_work(monkeypatch):
+    from src.dashboard import DashboardHandler
+    from src.dashboard import get_connection
+    import sqlite3
+    conn = sqlite3.connect(':memory:')
+    conn.execute('CREATE TABLE issues (url TEXT, repo_name TEXT, issue_number INTEGER, title TEXT, lifecycle_status TEXT)')
+    conn.execute("INSERT INTO issues VALUES ('http://test/99', 'test/repo', 99, 'Test', 'IMPLEMENTATION')")
+    conn.commit()
+    monkeypatch.setattr('src.dashboard.get_connection', lambda: conn)
+    monkeypatch.setattr('src.dashboard.schedule_status', lambda: 'Active')
+    monkeypatch.setattr('src.dashboard.get_recent_logs', lambda x: [])
+    monkeypatch.setattr('src.dashboard.verify_local_provider', lambda: None)
+    monkeypatch.setattr('glob.glob', lambda x: [])
+    monkeypatch.setattr('src.dashboard.collect_freshness_metadata', lambda: {})
+    data = DashboardHandler.get_dashboard_data(None)
+    assert 'active_work' in data
+    assert len(data['active_work']) == 1
+    assert data['active_work'][0]['lifecycle_status'] == 'IMPLEMENTATION'

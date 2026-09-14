@@ -98,6 +98,42 @@ HTML_TEMPLATE = """<!DOCTYPE html>
         .status-success { background: rgba(16, 185, 129, 0.2); color: var(--success); }
         .status-danger { background: rgba(239, 68, 68, 0.2); color: var(--danger); }
         .status-warning { background: rgba(245, 158, 11, 0.2); color: var(--warning); }
+        .status-waiting { background: rgba(167, 139, 250, 0.2); color: #a78bfa; }
+        .status-running { background: rgba(59, 130, 246, 0.2); color: #60a5fa; }
+        .status-idle { background: rgba(148, 163, 184, 0.2); color: var(--text-muted); }
+        
+        /* Implementation lifecycle timeline */
+        .lc-timeline {
+            display: flex;
+            gap: 0.5rem;
+            align-items: center;
+            flex-wrap: wrap;
+            margin-top: 0.25rem;
+        }
+        .lc-step {
+            display: flex;
+            align-items: center;
+            gap: 0.3rem;
+        }
+        .lc-dot {
+            width: 10px;
+            height: 10px;
+            border-radius: 50%;
+            background: var(--border);
+            display: inline-block;
+            flex-shrink: 0;
+        }
+        .lc-done { background: var(--success); }
+        .lc-active {
+            background: var(--primary);
+            box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.25);
+            animation: lc-pulse 1.5s infinite;
+        }
+        @keyframes lc-pulse {
+            0% { box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.25); }
+            50% { box-shadow: 0 0 0 6px rgba(59, 130, 246, 0.12); }
+            100% { box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.25); }
+        }
         
         table {
             width: 100%;
@@ -236,6 +272,16 @@ HTML_TEMPLATE = """<!DOCTYPE html>
                     <div id="opportunities-content">Loading...</div>
                 </div>
                 
+                <div class="card" id="work-center-card">
+                    <h2>Work Center</h2>
+                    <div id="active-work-content" style="margin-bottom: 1rem;">Loading...</div>
+                    <div style="display: flex; gap: 0.5rem; margin-bottom: 0.75rem; border-top: 1px solid var(--border); padding-top: 1rem;">
+                        <input id="lifecycle-url" type="text" placeholder="Paste issue URL (e.g. https://github.com/org/repo/issues/123)" style="flex: 1; background: rgba(0,0,0,0.3); color: var(--text); border: 1px solid var(--border); border-radius: 6px; padding: 0.5rem; font-size: 0.875rem;">
+                        <button class="btn" onclick="trackLifecycle()">Track</button>
+                    </div>
+                    <div id="lifecycle-content" style="color: var(--text-muted); font-size: 0.9rem;">Enter an issue URL to see where it is in the local workflow.</div>
+                </div>
+                
                 <div class="card">
                     <h2>Latest Digest</h2>
                     <div id="digest-content" class="digest-content">Loading...</div>
@@ -243,6 +289,33 @@ HTML_TEMPLATE = """<!DOCTYPE html>
             </div>
             
             <div style="display: flex; flex-direction: column; gap: 2rem;">
+                <div class="card">
+                    <h2>Today's Radar Run</h2>
+                    <div class="system-status">
+                        <div class="status-row" style="margin-bottom: 1rem;">
+                            <span>Trigger daily collection</span>
+                            <button class="btn" id="start-radar-btn" onclick="startDailyRadar()" style="background-color: var(--primary);">Start Today's Radar</button>
+                        </div>
+                        <div class="status-row">
+                            <span>Latest daily run</span>
+                            <span id="freshness-run" class="status-badge">Loading...</span>
+                        </div>
+                        <div class="status-row">
+                            <span>Last sync</span>
+                            <span id="freshness-sync" class="status-badge">Loading...</span>
+                        </div>
+                        <div class="status-row">
+                            <span>Latest issue data</span>
+                            <span id="freshness-issues" class="status-badge">Loading...</span>
+                        </div>
+                        <div class="status-row">
+                            <span>Payload generated</span>
+                            <span id="freshness-generated" class="status-badge">Loading...</span>
+                        </div>
+                        <div id="freshness-error" style="display: none; color: var(--danger); font-size: 0.875rem;"></div>
+                    </div>
+                </div>
+
                 <div class="card">
                     <h2>System Status</h2>
                     <div class="system-status">
@@ -254,29 +327,6 @@ HTML_TEMPLATE = """<!DOCTYPE html>
                             <span>Background Scheduler</span>
                             <span id="scheduler-status" class="status-badge">Checking...</span>
                         </div>
-                    </div>
-                </div>
-                
-                <div class="card">
-                    <h2>Data Freshness</h2>
-                    <div class="system-status">
-                        <div class="status-row">
-                            <span>Latest issue data</span>
-                            <span id="freshness-issues" class="status-badge">Loading...</span>
-                        </div>
-                        <div class="status-row">
-                            <span>Latest daily run</span>
-                            <span id="freshness-run" class="status-badge">Loading...</span>
-                        </div>
-                        <div class="status-row">
-                            <span>Last sync</span>
-                            <span id="freshness-sync" class="status-badge">Loading...</span>
-                        </div>
-                        <div class="status-row">
-                            <span>Payload generated</span>
-                            <span id="freshness-generated" class="status-badge">Loading...</span>
-                        </div>
-                        <div id="freshness-error" style="display: none; color: var(--danger); font-size: 0.875rem;"></div>
                     </div>
                 </div>
                 
@@ -473,6 +523,89 @@ HTML_TEMPLATE = """<!DOCTYPE html>
             }
         }
 
+        function lifecycleBadge(state) {
+            switch (state) {
+                case 'completed': return ['status-success', 'Completed'];
+                case 'blocked': return ['status-warning', 'Blocked'];
+                case 'failed': return ['status-danger', 'Failed'];
+                case 'waiting_human': return ['status-waiting', 'Waiting for human action'];
+                case 'running': return ['status-running', 'Currently running'];
+                default: return ['status-idle', 'Not started'];
+            }
+        }
+
+        function renderLifecycle(d) {
+            const badge = lifecycleBadge(d.state);
+            const steps = (d.timeline || []).map(t => {
+                const dot = t.state === 'done' ? 'lc-dot lc-done'
+                    : t.state === 'active' ? 'lc-dot lc-active' : 'lc-dot';
+                const style = t.state === 'active'
+                    ? 'font-weight:600; color:var(--text);'
+                    : 'color:var(--text-muted);';
+                return '<div class="lc-step"><span class="' + dot + '"></span>'
+                    + '<span style="font-size:0.75rem;' + style + '">' + esc(t.label) + '</span></div>';
+            }).join('');
+            let pathsHtml = '';
+            if (d.paths && Object.keys(d.paths).length) {
+                pathsHtml = '<div style="margin-top:0.75rem; border-top:1px solid var(--border); padding-top:0.5rem;">'
+                    + Object.entries(d.paths).map(([k, p]) =>
+                        '<div style="font-family:monospace; font-size:0.75rem; color:var(--text-muted);">'
+                        + esc(k) + ': ' + esc(p) + '</div>').join('')
+                    + '</div>';
+            }
+            return '<div style="display:flex; align-items:center; gap:0.75rem; flex-wrap:wrap; margin-bottom:0.5rem;">'
+                + '<span class="status-badge ' + badge[0] + '">' + badge[1] + '</span>'
+                + '<span style="font-weight:600;">' + esc(d.stage_label) + '</span>'
+                + '<span style="color:var(--text-muted); font-size:0.75rem;">Updated: ' + esc(d.last_updated || 'n/a') + '</span>'
+                + '</div>'
+                + '<div style="color:var(--text); font-size:0.875rem; margin-bottom:0.5rem;">' + esc(d.status) + '</div>'
+                + (d.human_action_hint ? '<div style="color:var(--warning); font-size:0.8rem; margin-bottom:0.5rem;">' + esc(d.human_action_hint) + '</div>' : '')
+                + '<div class="lc-timeline">' + steps + '</div>'
+                + pathsHtml;
+        }
+
+        async function trackLifecycle() {
+            const input = document.getElementById('lifecycle-url');
+            const container = document.getElementById('lifecycle-content');
+            const url = (input.value || '').trim();
+            if (!url) {
+                container.innerHTML = '<span style="color:var(--danger);">Enter an issue URL first.</span>';
+                return;
+            }
+            container.innerHTML = 'Loading lifecycle...';
+            try {
+                const res = await fetch('/api/implementation/status?url=' + encodeURIComponent(url));
+                const data = await res.json();
+                if (!res.ok || data.error) throw new Error(data.error || ('HTTP ' + res.status));
+                container.innerHTML = renderLifecycle(data);
+            } catch (e) {
+                container.innerHTML = '<span style="color:var(--danger);">Failed: ' + esc(e.message) + '</span>';
+            }
+        }
+
+        function trackLifecycleForUrl(url) {
+            document.getElementById('lifecycle-url').value = url;
+            trackLifecycle();
+        }
+
+        async function startDailyRadar() {
+            const btn = document.getElementById('start-radar-btn');
+            const originalText = btn.innerText;
+            btn.disabled = true;
+            btn.innerText = 'Starting...';
+            try {
+                const res = await fetch('/api/radar/start', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({}) });
+                const data = await res.json();
+                if (!res.ok || data.error) throw new Error(data.error || ('HTTP ' + res.status));
+                fetchData();
+            } catch (e) {
+                alert('Failed to start Radar: ' + e.message);
+            } finally {
+                btn.disabled = false;
+                btn.innerText = originalText;
+            }
+        }
+
         async function fetchData() {
             const btn = document.getElementById('refresh-btn');
             const refreshStatus = document.getElementById('refresh-status');
@@ -542,8 +675,11 @@ HTML_TEMPLATE = """<!DOCTYPE html>
                     oppsHtml = "<tr><td colspan='4'>No top opportunities right now.</td></tr>";
                 } else {
                     data.opportunities.forEach(o => {
+                        const commStatus = (o.communication && o.communication.status) || 'N/A';
+                        const isActionRequired = commStatus === 'REVIEW_REQUIRED';
+                        const rowStyle = isActionRequired ? "background-color: rgba(239, 68, 68, 0.1);" : "";
                         oppsHtml += `
-                        <tr>
+                        <tr style="${rowStyle}">
                             <td>
                                 <a href="${o.url}" target="_blank" style="color: var(--primary); text-decoration: none; font-weight: 600;">${o.repo}#${o.num}</a>
                                 <div style="font-size: 0.75rem; color: var(--text-muted); margin-top: 0.25rem;">${o.title}</div>
@@ -552,20 +688,40 @@ HTML_TEMPLATE = """<!DOCTYPE html>
                             <td>
                                 <div style="font-size: 0.875rem;">${o.readiness}</div>
                                 <div style="font-size: 0.75rem; color: var(--text-muted);">GSoC: ${o.gsoc ? o.gsoc.toFixed(1) : 'N/A'}</div>
-                                <div style="font-size: 0.75rem; margin-top: 0.25rem;">Comm: <span class="status-badge ${commBadgeClass((o.communication || {}).status)}" style="font-size: 0.7rem; padding: 0.1rem 0.45rem;">${(o.communication && o.communication.status) || 'N/A'}</span></div>
+                                <div style="font-size: 0.75rem; margin-top: 0.25rem;">Comm: <span class="status-badge ${commBadgeClass(commStatus)}" style="font-size: 0.7rem; padding: 0.1rem 0.45rem;">${commStatus}</span>
+                                ${isActionRequired ? '<span style="color: var(--danger); font-size: 0.75rem; font-weight: bold; margin-left: 0.5rem;">WAITING FOR YOU</span>' : ''}
+                                </div>
                             </td>
                             <td>
+                                <button class="btn btn-small" onclick="showCommunication('${esc(o.url)}')">Comm</button>
                                 <button class="btn btn-small" onclick="fetchEndpoint('/api/prompt?url=' + encodeURIComponent('${o.url}'), 'Implementation Prompt')">Prompt</button>
                                 <button class="btn btn-small" onclick="fetchEndpoint('/api/workspace?url=' + encodeURIComponent('${o.url}'), 'Workspace Path')">Workspace</button>
                                 <button class="btn btn-small" onclick="fetchEndpoint('/api/research?url=' + encodeURIComponent('${o.url}'), 'Research Report')">Research</button>
                                 <button class="btn btn-small" onclick="fetchEndpoint('/api/plan?url=' + encodeURIComponent('${o.url}'), 'Implementation Plan')">Plan</button>
-                                <button class="btn btn-small" onclick="showCommunication('${esc(o.url)}')">Comm</button>
+                                <button class="btn btn-small" onclick="trackLifecycleForUrl('${esc(o.url)}')">Lifecycle</button>
                             </td>
                         </tr>`;
                     });
                 }
                 oppsHtml += "</table>";
                 document.getElementById('opportunities-content').innerHTML = oppsHtml;
+
+                // Render Active Work
+                let activeWorkHtml = "<table><tr><th>Issue</th><th>Lifecycle State</th><th>Action</th></tr>";
+                if (data.active_work && data.active_work.length > 0) {
+                    data.active_work.forEach(w => {
+                        activeWorkHtml += `
+                        <tr>
+                            <td><a href="${w.url}" target="_blank" style="color: var(--primary); text-decoration: none;">${w.repo}#${w.num}</a><div style="font-size:0.75rem; color:var(--text-muted);">${w.title}</div></td>
+                            <td><span class="status-badge status-warning">${w.lifecycle_status}</span></td>
+                            <td><button class="btn btn-small" onclick="trackLifecycleForUrl('${esc(w.url)}')">View Lifecycle</button></td>
+                        </tr>`;
+                    });
+                } else {
+                    activeWorkHtml += "<tr><td colspan='3'>No active work.</td></tr>";
+                }
+                activeWorkHtml += "</table>";
+                document.getElementById('active-work-content').innerHTML = activeWorkHtml;
                 
                 // Render freshness metadata (read-only local state)
                 const f = data.freshness || {};
@@ -779,6 +935,31 @@ class DashboardHandler(BaseHTTPRequestHandler):
         except Exception as e:
             print("Error fetching opportunities for dashboard:", e)
 
+        # Active Work
+        data['active_work'] = []
+        try:
+            with get_connection() as conn:
+                cursor = conn.cursor()
+                cursor.execute("PRAGMA table_info(issues)")
+                cols = [c[1] for c in cursor.fetchall()]
+                if 'lifecycle_status' in cols:
+                    cursor.execute('''
+                        SELECT url, repo_name, issue_number, title, lifecycle_status 
+                        FROM issues 
+                        WHERE lifecycle_status IS NOT NULL 
+                        AND lifecycle_status NOT IN ('NEW', 'DISMISSED', '')
+                    ''')
+                    for row in cursor.fetchall():
+                        data['active_work'].append({
+                            "url": row[0],
+                            "repo": row[1],
+                            "num": row[2],
+                            "title": row[3],
+                            "lifecycle_status": row[4]
+                        })
+        except Exception as e:
+            print("Error fetching active work for dashboard:", e)
+
         # Read-only freshness metadata for the current LOCAL state (never
         # triggers sync, inference, or the daily pipeline).
         data['freshness'] = collect_freshness_metadata()
@@ -873,6 +1054,24 @@ class DashboardHandler(BaseHTTPRequestHandler):
                     self.send_json({"content": f.read()})
             else:
                 self.send_json({"content": "(No implementation plan found. Run hermes plan first.)"})
+        elif self.path.startswith('/api/implementation/status'):
+            # Phase 5A: read-only lifecycle snapshot for a specific issue URL.
+            # Derives everything from existing local DB/report/audit state.
+            qs = urllib.parse.parse_qs(urllib.parse.urlparse(self.path).query)
+            url = qs.get('url', [None])[0]
+            if not url or not str(url).strip():
+                self.send_json({"error": "Missing url"}, 400)
+                return
+            url = str(url).strip()
+            if not url.startswith(("http://", "https://")):
+                self.send_json({"error": "Invalid url"}, 400)
+                return
+            from src.implementation_status import get_implementation_status
+            snapshot = get_implementation_status(url)
+            if snapshot is None:
+                self.send_json({"error": "Issue not found"}, 404)
+                return
+            self.send_json(snapshot)
         elif self.path.startswith('/api/communication/') or urllib.parse.urlparse(self.path).path == '/api/implementation/start':
             # Communication review actions and the Start Work handoff are
             # state-changing: POST only.
@@ -893,6 +1092,13 @@ class DashboardHandler(BaseHTTPRequestHandler):
         """
         path = urllib.parse.urlparse(self.path).path
 
+        if path == '/api/implementation/status':
+            # Read-only lifecycle endpoint: GET only. Never a write action.
+            self.send_response(405)
+            self.send_header('Allow', 'GET')
+            self.end_headers()
+            return
+
         try:
             content_length = int(self.headers.get('Content-Length', 0) or 0)
         except (TypeError, ValueError):
@@ -905,6 +1111,22 @@ class DashboardHandler(BaseHTTPRequestHandler):
             return
         if not isinstance(body, dict):
             self.send_json({"error": "Invalid JSON body"}, 400)
+            return
+
+        if path == '/api/radar/start':
+            import subprocess
+            import sys
+            import os
+            try:
+                subprocess.Popen(
+                    [sys.executable, "main.py", "run-daily"],
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                    cwd=os.path.abspath(os.path.dirname(__file__) + "/..")
+                )
+                self.send_json({"ok": True, "message": "Radar daily run started in background."})
+            except Exception as e:
+                self.send_json({"error": f"Failed to start radar: {e}"}, 500)
             return
 
         url = body.get('url')

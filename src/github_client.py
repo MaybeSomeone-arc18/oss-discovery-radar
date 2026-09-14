@@ -100,15 +100,25 @@ def check_related_prs(repo_name, issue_number):
     
     # Check for PRs mentioning the issue number
     q = f"repo:{repo_name} type:pr {issue_number}"
-    url = f"https://api.github.com/search/issues?q={q}"
+    url = "https://api.github.com/search/issues"
     
     prs = []
     try:
-        response = requests.get(url, headers=headers, timeout=10)
+        response = requests.get(url, params={"q": q}, headers=headers, timeout=10)
         if response.status_code == 200:
             prs.extend(response.json().get('items', []))
+        elif response.status_code in (401, 403, 429):
+            raise RuntimeError(
+                f"GitHub PR validation unavailable for {repo_name}#{issue_number} "
+                f"(HTTP {response.status_code})"
+            )
         else:
-            print(f"Warning: GitHub API request failed for PR search {repo_name}#{issue_number} with status {response.status_code}")
+            raise RuntimeError(
+                f"GitHub PR search failed for {repo_name}#{issue_number} "
+                f"(HTTP {response.status_code})"
+            )
+    except RuntimeError:
+        raise
     except Exception as e:
         print(f"Error checking related PRs for {repo_name}#{issue_number}: {e}")
         

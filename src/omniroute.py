@@ -26,6 +26,14 @@ OMNIROUTE_BASE_URL_DEFAULT = "http://127.0.0.1:20128/v1"
 OMNIROUTE_MODEL_DEFAULT = "auto/coding:free"
 OMNIROUTE_MODELS_ENDPOINT = "/models"
 
+# Hermes-side identity of the OmniRoute execution provider. The app registers a
+# ``providers:`` entry under this id inside the workspace-local .hermes-runtime
+# config so the Hermes child can resolve OmniRoute as a named custom provider.
+# ``api_key_env`` names the environment variable the child reads the credential
+# from at runtime — the key value itself is never persisted anywhere.
+OMNIROUTE_HERMES_PROVIDER_ID = "omniroute"
+OMNIROUTE_API_KEY_ENV_NAME = "OMNIROUTE_API_KEY"
+
 # Short TTL for the availability probe so per-task routing never hits the
 # gateway once per task; a run that routes many tasks issues at most one
 # availability request per window.
@@ -92,3 +100,30 @@ def reset_omniroute_availability_cache():
     """Drop the cached availability result (primarily for tests)."""
     _availability_cache["available"] = False
     _availability_cache["checked_at"] = 0.0
+
+
+def get_omniroute_hermes_provider_config():
+    """Execution-provider handoff config for the Hermes child process.
+
+    Returns a dict describing how to address OmniRoute from the Hermes CLI, or
+    None when OmniRoute is not configured:
+
+        {
+            "provider_id": "omniroute",          # Hermes providers: entry id
+            "base_url": "http://127.0.0.1:20128/v1",
+            "api_key_env": "OMNIROUTE_API_KEY",  # env var NAME, never the value
+            "model": "auto/coding:free",
+        }
+
+    The credential VALUE is never returned or persisted: the Hermes child reads
+    it at runtime from ``api_key_env`` in the inherited process environment.
+    """
+    cfg = get_omniroute_config()
+    if cfg is None:
+        return None
+    return {
+        "provider_id": OMNIROUTE_HERMES_PROVIDER_ID,
+        "base_url": cfg["base_url"],
+        "api_key_env": OMNIROUTE_API_KEY_ENV_NAME,
+        "model": cfg["model"],
+    }

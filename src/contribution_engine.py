@@ -228,7 +228,7 @@ def calculate_first_contribution_score(issue_url):
             m.review_merge_activity_score, m.maintainer_response_time_hours,
             o.opportunity_score,
             ra.has_contributing, ra.test_frameworks,
-            r.repo_eligibility
+            r.repo_eligibility, r.repo_classification
         FROM issues i
         LEFT JOIN repository_metrics m ON i.repo_name = m.repo_name
         LEFT JOIN organizations o ON i.org_slug = o.slug
@@ -241,7 +241,7 @@ def calculate_first_contribution_score(issue_url):
         if not row:
             return 0.0, "Issue not found"
             
-        url, title, body, labels_str, tags_str, eng_value, gsoc_prep, repo_name, eligibility, assignee, issue_number, rev_score, resp_time, org_score, has_contrib, tests_str, repo_eligibility = row
+        url, title, body, labels_str, tags_str, eng_value, gsoc_prep, repo_name, eligibility, assignee, issue_number, rev_score, resp_time, org_score, has_contrib, tests_str, repo_eligibility, repo_classification = row
 
     # --- Initial Filters (Phase 2) ---
     if repo_eligibility in ("BLOCKED_STUDENT_WORK_REPO", "BLOCKED_ARCHIVED", "BLOCKED_FORK_OR_MIRROR"):
@@ -328,3 +328,120 @@ def calculate_first_contribution_score(issue_url):
     
     update_first_contribution_score(issue_url, round(final_score, 2), final_notes)
     return round(final_score, 2), final_notes
+
+
+def get_ready_first_contribution_candidates():
+    """Return READY_NOW candidates using the same ranking used by first-contribution."""
+    from src.database import get_connection, update_readiness_status
+    from src.github_client import check_related_prs, fetch_contribution_model
+    from src.deep_analysis import check_release_prerequisites, analyze_and_update_issue
+    import json
+
+    with get_connection() as conn:
+        rows = conn.execute("""
+            SELECT i.url, i.repo_name, i.issue_number, i.title, i.body_preview,
+                   i.org_slug, i.gsoc_preparation_score, o.opportunity_score,
+                   i.engineering_depth
+            FROM issues i
+            LEFT JOIN repositories r ON i.repo_name = r.name
+            LEFT JOIN organizations o ON i.org_slug = o.slug
+            WHERE i.state = 'OPEN'
+              AND (i.eligibility_status IS NULL OR i.eligibility_status NOT IN (
+                  'BLOCKED', 'SOLVED', 'DUPLICATE', 'BLOCKED_STUDENT_WORK_REPO',
+                  'BLOCKED_RELATED_PR', 'LIKELY_SOLVED'
+              ))
+              AND (i.activity_status IS NULL OR i.activity_status IN ('ACTIVE', 'LIKELY_ACTIVE'))
+              AND (i.assignee_status IS NULL OR i.assignee_status != 'ASSIGNED')
+              AND (r.repo_eligibility IS NULL OR r.repo_eligibility NOT IN (
+                  'BLOCKED_STUDENT_WORK_REPO', 'BLOCKED_ARCHIVED', 'BLOCKED_FORK_OR_MIRROR'
+              ))
+        """).fetchall()
+
+    candidates = []
+
+    for row in rows:
+        url, repo_name, issue_number, title, body, org_slug, gsoc, fit, depth = row
+        score, notes = calculate_first_contribution_score(url)
+
+        if score <= 0:
+            continue
+
+        if gsoc is None:
+            try:
+                analyze_and_update_issue(url)
+            except Exception:
+                pass
+
+        with get_connection() as conn:
+            gsoc, depth, gsoc_ev = conn.execute(
+                "SELECT gsoc_preparation_score, engineering_depth, gsoc_evidence "
+                "FROM issues WHERE url = ?",
+                (url,),
+            ).fetchone() or (None, None, None)
+
+        try:
+            prs = check_related_prs(repo_name, issue_number)
+        except Exception as exc:
+            print(f"Skipping {repo_name}#{issue_number}: PR validation unavailable: {exc}")
+            continue
+
+        if prs:
+            continue
+
+        readiness, read_ev = check_release_prerequisites(repo_name, title, body)
+        update_readiness_status(url, readiness, read_ev)
+
+        if readiness != "READY_NOW":
+            continue
+
+        model = fetch_contribution_model(repo_name)
+
+        non_engineering_markers = (
+            "policy",
+            "governance",
+            "discussion",
+            "proposal",
+            "process",
+            "clarifying",
+        )
+        issue_text = f"{title} {body}".lower()
+        if any(marker in issue_text for marker in non_engineering_markers):
+            continue
+
+        classification = (
+            "GOOD_ENTRY_POINT"
+            if not model.get("has_contributing")
+            else "STRONG_CANDIDATE"
+        )
+
+        candidates.append({
+            "url": url,
+            "repo": repo_name,
+            "num": issue_number,
+            "title": title,
+            "body": body,
+            "org": org_slug,
+            "score": score,
+            "notes": notes,
+            "gsoc": gsoc,
+            "depth": depth,
+            "gsoc_ev": gsoc_ev,
+            "readiness": readiness,
+            "read_ev": read_ev,
+            "classification": classification,
+        })
+
+    candidates.sort(key=lambda x: x["score"], reverse=True)
+    return candidates
+
+def is_engineering_contribution(title, body):
+    non_engineering_markers = (
+        "policy",
+        "governance",
+        "discussion",
+        "proposal",
+        "process",
+        "clarifying",
+    )
+    text = f"{title} {body}".lower()
+    return not any(marker in text for marker in non_engineering_markers)

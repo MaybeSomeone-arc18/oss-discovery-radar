@@ -117,7 +117,6 @@ def generate_daily_digest():
             
             # Check configurable threshold (e.g. from agent.yaml)
             from src.implementer import get_agent_config
-            from src.resource_manager import check_resources_for_hermes
             
             config = get_agent_config()
             threshold = config.get('hermes_auto_trigger_threshold', 50.0)

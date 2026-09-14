@@ -9,6 +9,16 @@ from src.implementer import (
 )
 from src.database import init_db, get_connection
 
+# Explicit execution-provider handoff produced by the routing layer for a
+# successful tool-required implementation (carries the env var NAME, never the
+# credential value).
+HANDOFF = {
+    "provider_id": "omniroute",
+    "base_url": "http://127.0.0.1:20128/v1",
+    "api_key_env": "OMNIROUTE_API_KEY",
+    "model": "auto/coding:free",
+}
+
 @pytest.fixture(autouse=True)
 def setup_test_db():
     init_db()
@@ -73,8 +83,8 @@ def test_guardrails_main_branch_modification():
 
 def test_successful_implementation(monkeypatch, tmp_path):
     monkeypatch.setattr(
-        "src.implementer.get_hermes_execution_plan",
-        lambda: (True, "llama3.2:3b", "validated"),
+        "src.implementer.get_hermes_execution_handoff",
+        lambda **kwargs: (True, "auto/coding:free", "validated", HANDOFF),
     )
 
     monkeypatch.setattr(
@@ -123,7 +133,9 @@ def test_successful_implementation(monkeypatch, tmp_path):
     monkeypatch.setattr("builtins.open", mock_open(read_data="plan"))
     implement(999)
 
-    assert captured["model"] == "llama3.2:3b"
+    assert captured["model"] == "auto/coding:free"
+    # The explicit execution-provider config reaches the Hermes implementation call.
+    assert captured["provider_config"] == HANDOFF
 
     from src.opportunity_manager import get_history
     hist = get_history("http://test/999")
@@ -152,14 +164,15 @@ def test_failed_implementation_repair_loop(mock_open, mock_exists, mock_gen_repo
     mock_run_tests.return_value = [{"framework": "pytest", "result": {"success": False}}]
     
     with patch(
-        "src.implementer.get_hermes_execution_plan",
-        return_value=(True, "llama3.2:3b", "validated"),
+        "src.implementer.get_hermes_execution_handoff",
+        return_value=(True, "auto/coding:free", "validated", HANDOFF),
     ):
         implement(999)
     
     # Repair should be called exactly once
     assert mock_repair.call_count == 1
-    assert mock_repair.call_args.kwargs["model"] == "llama3.2:3b"
+    assert mock_repair.call_args.kwargs["model"] == "auto/coding:free"
+    assert mock_repair.call_args.kwargs["provider_config"] == HANDOFF
     
     # Should end in failed state
     from src.opportunity_manager import get_history
@@ -167,7 +180,7 @@ def test_failed_implementation_repair_loop(mock_open, mock_exists, mock_gen_repo
     assert hist['lifecycle_status'] == 'IMPLEMENTATION_FAILED'
 
 
-@patch('src.implementer.get_hermes_execution_plan')
+@patch('src.implementer.get_hermes_execution_handoff')
 @patch('src.implementer.requests.get')
 @patch('src.implementer.subprocess.run')
 @patch('src.implementer.create_worktree')
@@ -201,7 +214,7 @@ def test_implementation_marks_in_progress_before_hermes(
 
     mock_run_tests.return_value = [{"framework": "pytest", "result": {"success": True}}]
 
-    mock_plan.return_value = (True, "llama3.2:3b", "validated")
+    mock_plan.return_value = (True, "auto/coding:free", "validated", HANDOFF)
     from src.opportunity_manager import get_history
 
     assert get_history("http://test/999")["lifecycle_status"] == "PLANNED"
@@ -247,8 +260,8 @@ def test_implement_blocks_without_communication_approval(monkeypatch):
     )
     monkeypatch.setattr(
         implementer,
-        "get_hermes_execution_plan",
-        lambda: (True, "llama3.2:3b", "validated"),
+        "get_hermes_execution_handoff",
+        lambda **kwargs: (True, "auto/coding:free", "validated", HANDOFF),
     )
     monkeypatch.setattr(
         implementer,
@@ -304,8 +317,8 @@ def test_implement_allows_approved_communication(monkeypatch, tmp_path):
     )
     monkeypatch.setattr(
         implementer,
-        "get_hermes_execution_plan",
-        lambda: (True, "llama3.2:3b", "validated"),
+        "get_hermes_execution_handoff",
+        lambda **kwargs: (True, "auto/coding:free", "validated", HANDOFF),
     )
     plan_dir = tmp_path / "reports"
     plan_dir.mkdir()
@@ -348,3 +361,119 @@ def test_implement_allows_approved_communication(monkeypatch, tmp_path):
     assert success is False
     assert test_results is None
     assert diff_stat == ""
+
+
+def test_implement_defers_without_tool_capable_provider(monkeypatch, tmp_path):
+    """When no tool-capable execution provider is available, implement() must
+    defer before creating any worktree instead of running llama3.2:3b and
+    returning a no-diff response."""
+    import src.implementer as implementer
+
+    from src.autonomous_guard import TOOL_REQUIRED_UNAVAILABLE_REASON
+
+    issue_url = "http://test/999"
+
+    monkeypatch.setattr(
+        implementer,
+        "get_issue_context_by_url",
+        lambda url: {
+            "url": issue_url,
+            "issue_number": 999,
+            "org_slug": "test",
+            "repo_name": "test/repo",
+            "title": "Test issue",
+            "body_preview": "Test body",
+        },
+    )
+    monkeypatch.setattr(
+        implementer.requests,
+        "get",
+        lambda *args, **kwargs: type(
+            "Response",
+            (),
+            {"status_code": 200, "json": lambda self: {"title": "Test issue"}},
+        )(),
+    )
+    monkeypatch.setattr(
+        implementer,
+        "get_hermes_execution_handoff",
+        lambda task_type="lightweight": (
+            False,
+            None,
+            TOOL_REQUIRED_UNAVAILABLE_REASON,
+            None,
+        ),
+    )
+    monkeypatch.setattr(
+        "src.opportunity_manager.communication_allows_implementation",
+        lambda url: True,
+    )
+    worktree_calls = []
+    monkeypatch.setattr(
+        implementer,
+        "create_worktree",
+        lambda *args: worktree_calls.append(args) or tmp_path / "worktree",
+    )
+
+    success, test_results, diff_stat = implementer.implement(issue_url)
+
+    assert success is False
+    assert test_results is None
+    assert diff_stat == ""
+    # Deferred at the execution preflight; no worktree was ever created.
+    assert worktree_calls == []
+
+def test_create_patch_does_not_mutate_index(tmp_path):
+    import subprocess
+    from src.implementer import create_patch
+    
+    # Initialize a git repo
+    subprocess.run(['git', 'init'], cwd=str(tmp_path), check=True)
+    subprocess.run(['git', 'config', 'user.email', 'test@example.com'], cwd=str(tmp_path), check=True)
+    subprocess.run(['git', 'config', 'user.name', 'test'], cwd=str(tmp_path), check=True)
+    
+    # Create an initial commit
+    tracked_file = tmp_path / 'tracked.txt'
+    tracked_file.write_text('initial')
+    subprocess.run(['git', 'add', 'tracked.txt'], cwd=str(tmp_path), check=True)
+    subprocess.run(['git', 'commit', '-m', 'init'], cwd=str(tmp_path), check=True)
+    
+    # Modify tracked file
+    tracked_file.write_text('modified')
+    
+    # Create untracked file
+    untracked_file = tmp_path / 'untracked.txt'
+    untracked_file.write_text('new')
+    
+    output_patch = tmp_path / 'out.diff'
+    res = create_patch(tmp_path, output_patch)
+    assert res is True
+    
+    # Verify index is untouched (untracked file is still untracked)
+    proc = subprocess.run(['git', 'status', '--porcelain'], cwd=str(tmp_path), capture_output=True, text=True)
+    assert '?? untracked.txt' in proc.stdout
+    assert ' M tracked.txt' in proc.stdout
+    
+    patch_content = output_patch.read_text()
+    assert 'modified' in patch_content
+    assert 'new' in patch_content
+    assert 'untracked.txt' in patch_content
+
+def test_generate_reports_implementation_diff(monkeypatch, tmp_path):
+    from src.implementer import generate_reports
+    import json
+    
+    captured = {}
+    def fake_run(prompt, **kwargs):
+        captured['prompt'] = prompt
+        return '[FACT] Implementation details'
+        
+    monkeypatch.setattr('src.implementer.run_hermes_oneshot', fake_run)
+    monkeypatch.setattr('src.implementer.get_hermes_execution_handoff', lambda task_type: (True, 'auto/coding:free', 'ok', None))
+    
+    generate_reports(123, tmp_path, tmp_path, None, '+++ b/some_file.py', True)
+    
+    prompt = captured.get('prompt', '')
+    assert 'GIT DIFF:' in prompt
+    assert '+++ b/some_file.py' in prompt
+    assert 'Describe ONLY what is supported by the provided diff' in prompt

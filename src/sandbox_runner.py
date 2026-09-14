@@ -74,7 +74,10 @@ def discover_and_run_tests(cwd):
         
     # Java (Maven)
     if (cwd_path / "pom.xml").exists():
-        res = run_in_sandbox(["mvn", "test"], cwd)
+        if (cwd_path / "mvnw").exists():
+            res = run_in_sandbox(["./mvnw", "test"], cwd)
+        else:
+            res = run_in_sandbox(["mvn", "test"], cwd)
         results.append({"framework": "maven", "result": res})
         
     # Java (Gradle)

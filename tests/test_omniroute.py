@@ -3,7 +3,10 @@ import pytest
 from unittest.mock import patch
 
 from src.omniroute import (
+    OMNIROUTE_API_KEY_ENV_NAME,
+    OMNIROUTE_HERMES_PROVIDER_ID,
     get_omniroute_config,
+    get_omniroute_hermes_provider_config,
     omniroute_is_available,
     omniroute_is_available_cached,
     reset_omniroute_availability_cache,
@@ -54,6 +57,45 @@ def test_omniroute_config_missing_credentials_fails_safe(monkeypatch):
 
     assert get_omniroute_config() is None
     assert omniroute_is_available() is False
+
+
+def test_omniroute_hermes_provider_config_none_without_key(monkeypatch):
+    """No OmniRoute key -> no Hermes handoff config."""
+    monkeypatch.delenv("OMNIROUTE_API_KEY", raising=False)
+
+    assert get_omniroute_hermes_provider_config() is None
+
+
+def test_omniroute_hermes_provider_config_carries_env_name_not_value(monkeypatch):
+    """The handoff config names the env var but never contains the key value."""
+    monkeypatch.setenv("OMNIROUTE_API_KEY", "super-secret-omniroute-key-123")
+    monkeypatch.setenv("OMNIROUTE_BASE_URL", "http://127.0.0.1:20128/v1")
+    monkeypatch.setenv("OMNIROUTE_MODEL", "auto/coding:free")
+
+    cfg = get_omniroute_hermes_provider_config()
+
+    assert cfg == {
+        "provider_id": OMNIROUTE_HERMES_PROVIDER_ID,
+        "base_url": "http://127.0.0.1:20128/v1",
+        "api_key_env": OMNIROUTE_API_KEY_ENV_NAME,
+        "model": "auto/coding:free",
+    }
+    # The credential VALUE must never appear in the handoff config.
+    assert "super-secret-omniroute-key-123" not in str(cfg)
+    assert "api_key" not in cfg or cfg.get("api_key") is None
+
+
+def test_omniroute_hermes_provider_config_uses_defaults(monkeypatch):
+    """Unset base URL/model fall back to OmniRoute defaults in the handoff."""
+    monkeypatch.setenv("OMNIROUTE_API_KEY", "secret-key")
+    monkeypatch.delenv("OMNIROUTE_BASE_URL", raising=False)
+    monkeypatch.delenv("OMNIROUTE_MODEL", raising=False)
+
+    cfg = get_omniroute_hermes_provider_config()
+
+    assert cfg["base_url"] == OMNIROUTE_BASE_URL_DEFAULT
+    assert cfg["model"] == OMNIROUTE_MODEL_DEFAULT
+    assert cfg["api_key_env"] == "OMNIROUTE_API_KEY"
 
 
 def test_omniroute_available_when_reachable_and_authenticated(monkeypatch):

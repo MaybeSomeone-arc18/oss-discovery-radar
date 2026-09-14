@@ -73,6 +73,47 @@ model:
                 with pytest.raises(RuntimeError, match="failed with 500"):
                     verify_local_provider()
 
+def test_verify_local_provider_rejects_drifted_glm_default():
+    """E2E regression: the drifted config default (glm-5.3:cloud) is rejected."""
+    drifted_yaml = """
+model:
+  default: glm-5.3:cloud
+  provider: custom
+"""
+    with patch("os.path.exists", return_value=True):
+        with patch("builtins.open", mock_open(read_data=drifted_yaml)):
+            with pytest.raises(RuntimeError, match="not llama3.2:3b"):
+                verify_local_provider()
+
+def test_verify_local_provider_rejects_drifted_ollama_launch_provider():
+    """E2E regression: provider 'ollama-launch' is not a local/custom provider."""
+    drifted_yaml = """
+model:
+  default: llama3.2:3b
+  provider: ollama-launch
+"""
+    with patch("os.path.exists", return_value=True):
+        with patch("builtins.open", mock_open(read_data=drifted_yaml)):
+            with pytest.raises(RuntimeError, match="not local/custom"):
+                verify_local_provider()
+
+def test_verify_local_provider_accepts_fixed_3b_custom_config():
+    """Corrected config (llama3.2:3b + custom) passes and proves the local Ollama path."""
+    fixed_yaml = """
+model:
+  default: llama3.2:3b
+  provider: custom
+  base_url: http://127.0.0.1:11434/v1
+"""
+    with patch("os.path.exists", return_value=True):
+        with patch("builtins.open", mock_open(read_data=fixed_yaml)):
+            with patch("requests.get") as mock_get:
+                mock_get.return_value.status_code = 200
+                mock_get.return_value.json.return_value = {"models": [{"name": "llama3.2:3b"}]}
+                verify_local_provider()
+                # Ollama API base is the base_url with /v1 stripped.
+                assert mock_get.call_args[0][0] == "http://127.0.0.1:11434/api/tags"
+
 def test_run_hermes_oneshot_success():
     mock_result = MagicMock()
     mock_result.returncode = 0
@@ -108,6 +149,191 @@ def test_run_hermes_oneshot_passes_model_override(monkeypatch):
         "--model",
         "llama3.2:3b",
     ]
+
+
+def test_run_hermes_oneshot_lightweight_has_no_provider_flag(monkeypatch, tmp_path):
+    """Lightweight/local runs stay backward-compatible: no --provider flag and
+    no provider entry injected into the mirrored runtime config."""
+    from src.hermes_agent import run_hermes_oneshot
+
+    runtime = tmp_path / ".hermes-runtime"
+    fake_home = tmp_path / "fake-home"
+    (fake_home / ".hermes").mkdir(parents=True)
+    (fake_home / ".hermes" / "config.yaml").write_text(
+        "model:\n  default: llama3.2:3b\n  provider: custom\n"
+        "  base_url: http://127.0.0.1:11434/v1\n"
+    )
+
+    captured = {}
+
+    class Result:
+        returncode = 0
+        stdout = "OK"
+        stderr = ""
+
+    def fake_run(cmd, **kwargs):
+        captured["cmd"] = cmd
+        captured["env"] = kwargs.get("env")
+        return Result()
+
+    def fake_expanduser(path):
+        if path == "~/.hermes/config.yaml":
+            return str(fake_home / ".hermes" / "config.yaml")
+        return path
+
+    monkeypatch.setattr("src.hermes_agent._hermes_runtime_home", lambda: runtime)
+    monkeypatch.setattr("os.path.expanduser", fake_expanduser)
+    monkeypatch.setattr("src.hermes_agent.subprocess.run", fake_run)
+
+    assert run_hermes_oneshot("prompt text", model="llama3.2:3b") == "OK"
+    assert captured["cmd"] == [
+        "hermes",
+        "-z",
+        "prompt text",
+        "--model",
+        "llama3.2:3b",
+    ]
+    assert "--provider" not in captured["cmd"]
+    # The mirrored config must NOT have been given a provider entry.
+    seeded = (runtime / "config.yaml").read_text()
+    assert "omniroute" not in seeded
+
+
+def test_run_hermes_oneshot_with_provider_config_targets_omniroute(monkeypatch, tmp_path):
+    """A tool-required implementation run with the OmniRoute handoff must build
+    `hermes -z ... --model auto/coding:free --provider omniroute`, inject ONLY
+    the endpoint + env var NAME into the mirrored config (never the key value),
+    and keep HERMES_HOME inside the workspace."""
+    from src.hermes_agent import run_hermes_oneshot
+
+    runtime = tmp_path / ".hermes-runtime"
+    fake_home = tmp_path / "fake-home"
+    (fake_home / ".hermes").mkdir(parents=True)
+    (fake_home / ".hermes" / "config.yaml").write_text(
+        "model:\n  default: llama3.2:3b\n  provider: custom\n"
+        "  base_url: http://127.0.0.1:11434/v1\n"
+    )
+
+    captured = {}
+
+    class Result:
+        returncode = 0
+        stdout = "OK"
+        stderr = ""
+
+    def fake_run(cmd, **kwargs):
+        captured["cmd"] = cmd
+        captured["env"] = kwargs.get("env")
+        return Result()
+
+    def fake_expanduser(path):
+        if path == "~/.hermes/config.yaml":
+            return str(fake_home / ".hermes" / "config.yaml")
+        return path
+
+    monkeypatch.setattr("src.hermes_agent._hermes_runtime_home", lambda: runtime)
+    monkeypatch.setattr("os.path.expanduser", fake_expanduser)
+    monkeypatch.setattr("src.hermes_agent.subprocess.run", fake_run)
+    monkeypatch.setenv("OMNIROUTE_API_KEY", "super-secret-omniroute-key-123")
+
+    result = run_hermes_oneshot(
+        "prompt text",
+        model="auto/coding:free",
+        provider_id="omniroute",
+        base_url="http://127.0.0.1:20128/v1",
+        api_key_env="OMNIROUTE_API_KEY",
+    )
+
+    assert result == "OK"
+    assert captured["cmd"] == [
+        "hermes",
+        "-z",
+        "prompt text",
+        "--model",
+        "auto/coding:free",
+        "--provider",
+        "omniroute",
+    ]
+    # HERMES_HOME sandbox redirection is preserved for provider runs too.
+    assert captured["env"]["HERMES_HOME"] == str(runtime)
+
+    seeded = (runtime / "config.yaml").read_text()
+    assert "omniroute" in seeded
+    assert "http://127.0.0.1:20128/v1" in seeded
+    assert "key_env: OMNIROUTE_API_KEY" in seeded
+    # The implementation must target OmniRoute, NOT local Ollama.
+    assert "11434" not in seeded
+    # The credential VALUE is never written to the config file.
+    assert "super-secret-omniroute-key-123" not in seeded
+
+
+def test_run_hermes_oneshot_provider_config_requires_endpoint(monkeypatch, tmp_path):
+    """A provider handoff without base_url/api_key_env fails fast (misuse)."""
+    import pytest
+    from src.hermes_agent import run_hermes_oneshot
+
+    runtime = tmp_path / ".hermes-runtime"
+    fake_home = tmp_path / "fake-home"
+    (fake_home / ".hermes").mkdir(parents=True)
+    (fake_home / ".hermes" / "config.yaml").write_text(
+        "model:\n  default: llama3.2:3b\n  provider: custom\n"
+    )
+
+    def fake_expanduser(path):
+        if path == "~/.hermes/config.yaml":
+            return str(fake_home / ".hermes" / "config.yaml")
+        return path
+
+    monkeypatch.setattr("src.hermes_agent._hermes_runtime_home", lambda: runtime)
+    monkeypatch.setattr("os.path.expanduser", fake_expanduser)
+
+    with pytest.raises(ValueError, match="provider_id requires base_url"):
+        run_hermes_oneshot(
+            "prompt text",
+            model="auto/coding:free",
+            provider_id="omniroute",
+        )
+
+
+def test_run_hermes_oneshot_redirects_hermes_home_into_workspace(monkeypatch, tmp_path):
+    """The Hermes child must run with HERMES_HOME inside the writable workspace
+    (so its logs/state are not EPERM), seeding config.yaml from the user home
+    so provider/model behavior is preserved."""
+    from src.hermes_agent import run_hermes_oneshot
+
+    runtime = tmp_path / ".hermes-runtime"
+    fake_home = tmp_path / "fake-home"
+    (fake_home / ".hermes").mkdir(parents=True)
+    (fake_home / ".hermes" / "config.yaml").write_text(
+        "model:\n  default: llama3.2:3b\n  provider: custom\n"
+        "  base_url: http://127.0.0.1:11434/v1\n"
+    )
+
+    captured = {}
+
+    class Result:
+        returncode = 0
+        stdout = "OK"
+        stderr = ""
+
+    def fake_run(cmd, **kwargs):
+        captured["env"] = kwargs.get("env")
+        return Result()
+
+    def fake_expanduser(path):
+        if path == "~/.hermes/config.yaml":
+            return str(fake_home / ".hermes" / "config.yaml")
+        return path
+
+    monkeypatch.setattr("src.hermes_agent._hermes_runtime_home", lambda: runtime)
+    monkeypatch.setattr("os.path.expanduser", fake_expanduser)
+    monkeypatch.setattr("src.hermes_agent.subprocess.run", fake_run)
+
+    assert run_hermes_oneshot("prompt text") == "OK"
+    assert captured["env"]["HERMES_HOME"] == str(runtime)
+    seeded = (runtime / "config.yaml").read_text()
+    assert "llama3.2:3b" in seeded
+    assert "provider: custom" in seeded
 
 
 def test_run_hermes_oneshot_timeout():
@@ -160,10 +386,10 @@ def test_plan_passes_selected_model_to_hermes(monkeypatch, tmp_path):
 
     def fake_execution_plan(task_type="lightweight"):
         plan_calls.append(task_type)
-        return (True, "llama3.2:3b", "validated")
+        return (True, "auto/coding:free", "validated", None)
 
     monkeypatch.setattr(
-        "src.autonomous_guard.get_hermes_execution_plan",
+        "src.autonomous_guard.get_hermes_execution_handoff",
         fake_execution_plan,
     )
     monkeypatch.setattr(
@@ -190,10 +416,10 @@ def test_plan_passes_selected_model_to_hermes(monkeypatch, tmp_path):
     monkeypatch.setattr("src.hermes_agent.run_hermes_oneshot", fake_run)
 
     assert plan(123) is True
-    assert captured["model"] == "llama3.2:3b"
+    assert captured["model"] == "auto/coding:free"
     assert (tmp_path / "plan.md").read_text() == "[FACT] Plan"
-    # Issue has no engineering_depth -> ordinary planning stays lightweight.
-    assert plan_calls == ["lightweight"]
+    # Planning is reasoning-heavy: it always requests the heavy (OmniRoute) route.
+    assert plan_calls == ["heavy"]
 
 
 @patch("src.hermes_agent.verify_local_provider")
@@ -317,5 +543,83 @@ def test_implement_issue_with_hermes_passes_selected_model(monkeypatch, tmp_path
 
     assert result == "implemented"
     assert captured["model"] == "llama3.2:3b"
+    # Lightweight/no handoff: no provider kwargs reach the oneshot call.
+    assert "provider_id" not in captured
+    assert "base_url" not in captured
+    assert "api_key_env" not in captured
 
 
+def test_implement_issue_with_hermes_passes_provider_config(monkeypatch, tmp_path):
+    """A tool-required implementation with the OmniRoute handoff forwards the
+    full provider config to run_hermes_oneshot (never the key value)."""
+    from src.hermes_agent import implement_issue_with_hermes
+
+    captured = {}
+
+    def fake_run(prompt, **kwargs):
+        captured.update(kwargs)
+        return "implemented"
+
+    monkeypatch.setattr("src.hermes_agent.run_hermes_oneshot", fake_run)
+    monkeypatch.setattr("src.hermes_agent.verify_local_provider", lambda: None)
+
+    provider_config = {
+        "provider_id": "omniroute",
+        "base_url": "http://127.0.0.1:20128/v1",
+        "api_key_env": "OMNIROUTE_API_KEY",
+        "model": "auto/coding:free",
+    }
+    result = implement_issue_with_hermes(
+        tmp_path,
+        "Issue Title: Test\nPLAN:\nDo the thing",
+        model="auto/coding:free",
+        provider_config=provider_config,
+    )
+
+    assert result == "implemented"
+    assert captured["model"] == "auto/coding:free"
+    assert captured["provider_id"] == "omniroute"
+    assert captured["base_url"] == "http://127.0.0.1:20128/v1"
+    assert captured["api_key_env"] == "OMNIROUTE_API_KEY"
+    assert "super-secret" not in str(captured)
+
+
+def test_get_issue_context_by_url(monkeypatch):
+    from src.hermes_agent import get_issue_context_by_url
+
+    class FakeCursor:
+        description = [("url",), ("issue_number",), ("repo_name",)]
+
+        def execute(self, query, params):
+            assert query == "SELECT * FROM issues WHERE url = ?"
+            assert params == ("https://github.com/example/repo/issues/25",)
+
+        def fetchone(self):
+            return (
+                "https://github.com/example/repo/issues/25",
+                25,
+                "example/repo",
+            )
+
+    class FakeConnection:
+        def cursor(self):
+            return FakeCursor()
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            pass
+
+    monkeypatch.setattr(
+        "src.hermes_agent.get_connection",
+        lambda: FakeConnection(),
+    )
+
+    issue = get_issue_context_by_url(
+        "https://github.com/example/repo/issues/25"
+    )
+
+    assert issue["url"] == "https://github.com/example/repo/issues/25"
+    assert issue["issue_number"] == 25
+    assert issue["repo_name"] == "example/repo"
