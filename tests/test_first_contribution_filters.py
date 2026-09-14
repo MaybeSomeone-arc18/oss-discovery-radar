@@ -85,6 +85,7 @@ def test_first_contribution_filtering_and_diversity(mock_prereq, mock_analyze, m
     assert len(table_lines) == 3
     assert "repoB" in output
 
+@patch('src.autonomous_guard.validate_hermes_execution', return_value=(True, "ok"))
 @patch('src.database.get_connection')
 @patch('src.contribution_engine.calculate_first_contribution_score')
 @patch('src.github_client.check_related_prs')
@@ -94,7 +95,7 @@ def test_first_contribution_filtering_and_diversity(mock_prereq, mock_analyze, m
 @patch('src.deep_analysis.check_release_prerequisites')
 @patch('src.hermes_agent.research')
 @patch('src.hermes_agent.plan')
-def test_first_contribution_hermes_handoff_and_dynamic_refetch(mock_plan, mock_research, mock_prereq, mock_analyze, mock_update, mock_model, mock_prs, mock_score, mock_conn, capsys):
+def test_first_contribution_hermes_handoff_and_dynamic_refetch(mock_plan, mock_research, mock_prereq, mock_analyze, mock_update, mock_model, mock_prs, mock_score, mock_conn, mock_val, capsys):
     mock_cursor = MagicMock()
     # First fetchall returns candidate with old dynamic fields
     mock_cursor.fetchall.return_value = [

@@ -252,7 +252,7 @@ def _run_communication_recommendation(monkeypatch, tmp_path, research_text):
 
     def fake_plan(task_type="lightweight"):
         calls.append(task_type)
-        return (True, "auto/coding:free", "validated", None)
+        return (True, "opencode-zen/nemotron-3.5-lightning-free", "validated", None)
 
     monkeypatch.setattr(
         "src.communication_gate.get_hermes_execution_handoff", fake_plan
@@ -298,7 +298,7 @@ def test_communication_recommendation_parses_real_h1_research(monkeypatch, tmp_p
     )
 
     assert calls == ["heavy"]
-    assert captured["model"] == "auto/coding:free"
+    assert captured["model"] == "opencode-zen/nemotron-3.5-lightning-free"
     prompt = captured["prompt"]
     for section in (
         "Questions for Maintainers",
@@ -320,7 +320,7 @@ def test_communication_recommendation_parses_real_h3_research(monkeypatch, tmp_p
     )
 
     assert calls == ["heavy"]
-    assert captured["model"] == "auto/coding:free"
+    assert captured["model"] == "opencode-zen/nemotron-3.5-lightning-free"
     prompt = captured["prompt"]
     for section in (
         "Questions for Maintainers",
@@ -333,3 +333,42 @@ def test_communication_recommendation_parses_real_h3_research(monkeypatch, tmp_p
     assert "no AI-generated code push without human review" in prompt
     assert result["status"] == "NOT_REQUIRED"
     assert result["implementation_gate"] == "MAY_PROCEED"
+
+
+def test_communication_gate_considers_discussion_context(monkeypatch, tmp_path):
+    import src.communication_gate as gate
+
+    mock_issue = {
+        "org_slug": "checkstyle",
+        "repo_name": "checkstyle/checkstyle",
+        "issue_number": 21480,
+        "title": "Checkstyle #21480 discussion test",
+        "url": "https://github.com/checkstyle/checkstyle/issues/21480",
+        "body_preview": "Truncated preview",
+        "discussion_context": "=== ISSUE BODY (by author) ===\nNeed clarification on rule X.\n=== DISCUSSION HISTORY (showing 1 comment) ===\n[Comment #1 by Maintainer (MEMBER) at 2026-09-14]: Use Option B for rule X. No further questions needed."
+    }
+
+    monkeypatch.setattr(gate, "get_issue_context", lambda url: mock_issue)
+    
+    # Create fake research.md
+    reports_dir = tmp_path / "checkstyle" / "checkstyle" / "reports" / "21480"
+    reports_dir.mkdir(parents=True)
+    research_file = reports_dir / "research.md"
+    research_file.write_text("""# Questions for Maintainers\n- Maintainer answered Option B in discussion.\n# Recommended Next Step\nProceed with Option B implementation.\n# Constraints\nNone\n# Unknowns\nNone""")
+
+    captured_prompt = []
+    def mock_run_oneshot(prompt, safe_mode=True, model=None, **kwargs):
+        captured_prompt.append(prompt)
+        return """## Recommendation\nNO_CLARIFICATION_NEEDED\n\n## Suggested Reply\nN/A\n\n## Reason\nMaintainer already decided Option B in discussion.\n\n## Questions\n- None\n\n## Implementation Gate\nMAY_PROCEED"""
+
+    monkeypatch.setattr(gate, "run_hermes_oneshot", mock_run_oneshot)
+    monkeypatch.setattr("src.autonomous_guard.get_hermes_execution_handoff", lambda task_type: (True, "mock-model", "ok", {}))
+    monkeypatch.setattr(gate, "set_communication_recommendation", lambda issue_url, reply, reason: None)
+
+    res = gate.generate_communication_recommendation("https://github.com/checkstyle/checkstyle/issues/21480")
+
+    assert res["status"] == "NOT_REQUIRED"
+    assert res["implementation_gate"] == "MAY_PROCEED"
+    assert len(captured_prompt) == 1
+    assert "Discussion & Context:" in captured_prompt[0]
+    assert "Use Option B for rule X. No further questions needed." in captured_prompt[0]

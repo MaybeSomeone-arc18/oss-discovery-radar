@@ -278,12 +278,12 @@ def test_implement_preflight_uses_implementation_routing(monkeypatch, tmp_path):
 def test_ordinary_research_stays_lightweight(monkeypatch, tmp_path):
     calls = []
 
-    def fake_plan(**kwargs):
+    def fake_handoff(**kwargs):
         calls.append(kwargs)
-        return (True, "llama3.2:3b", "validated")
+        return (True, "llama3.2:3b", "validated", None)
 
     monkeypatch.setattr(
-        "src.autonomous_guard.get_hermes_execution_plan", fake_plan
+        "src.autonomous_guard.get_hermes_execution_handoff", fake_handoff
     )
     monkeypatch.setattr(
         "src.hermes_agent.get_issue_context",
@@ -302,8 +302,7 @@ def test_ordinary_research_stays_lightweight(monkeypatch, tmp_path):
     )
 
     assert research(5) is True
-    # research() calls the plan with no task_type -> default lightweight.
-    assert calls == [{}]
+    assert calls == [{"task_type": "heavy"}]
 
 
 # --- e. no other callers accidentally change task class ----------------------

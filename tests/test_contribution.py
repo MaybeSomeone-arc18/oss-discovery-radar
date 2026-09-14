@@ -64,3 +64,36 @@ def test_save_and_fetch_issue():
         
         cursor.execute("SELECT title FROM pull_requests WHERE pr_number = 999999999")
         assert cursor.fetchone()[0] == "Test PR"
+
+
+def test_format_discussion_context():
+    from src.github_client import format_discussion_context
+
+    comments = [
+        {
+            "author": {"login": "maintainer1", "association": "MEMBER"},
+            "bodyText": "Please make sure to update docstrings.",
+            "createdAt": "2026-09-14T10:00:00Z"
+        },
+        {
+            "author": {"login": "contributor1", "association": "CONTRIBUTOR"},
+            "bodyText": "I will take care of this.",
+            "createdAt": "2026-09-14T10:05:00Z"
+        }
+    ]
+
+    ctx = format_discussion_context(
+        body_text="Issue description body text",
+        author_login="issueauthor",
+        author_association="NONE",
+        comments_nodes=comments
+    )
+
+    assert "=== ISSUE BODY (by Community Member (issueauthor, NONE)) ===" in ctx
+    assert "Issue description body text" in ctx
+    assert "=== DISCUSSION HISTORY (showing last 2 comments) ===" in ctx
+    assert "Maintainer (maintainer1, MEMBER)" in ctx
+    assert "Please make sure to update docstrings." in ctx
+    assert "Contributor (contributor1, CONTRIBUTOR)" in ctx
+    assert "I will take care of this." in ctx
+

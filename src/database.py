@@ -188,6 +188,8 @@ def init_db():
             cursor.execute("ALTER TABLE issues ADD COLUMN state TEXT")
         if 'updated_at' not in issue_columns:
             cursor.execute("ALTER TABLE issues ADD COLUMN updated_at TEXT")
+        if 'discussion_context' not in issue_columns:
+            cursor.execute("ALTER TABLE issues ADD COLUMN discussion_context TEXT")
         if 'comments_count' not in issue_columns:
             cursor.execute("ALTER TABLE issues ADD COLUMN comments_count INTEGER DEFAULT 0")
         if 'author' not in issue_columns:
@@ -395,26 +397,27 @@ def save_gsoc_project(org_slug, year, title, description, short_description, con
         ''', (org_slug, year, title, description, short_description, contributor, url, code_url, technologies, tags_str))
         conn.commit()
 
-def save_issue(url, repo_name, org_slug, issue_number, title, created_at, updated_at, state, labels, body_preview, comments_count, author, assignee_status, milestone, classified_tags=None):
+def save_issue(url, repo_name, org_slug, issue_number, title, created_at, updated_at, state, labels, body_preview, comments_count, author, assignee_status, milestone, classified_tags=None, discussion_context=None):
     import json
     tags_str = json.dumps(classified_tags) if classified_tags else None
     with get_connection() as conn:
         cursor = conn.cursor()
         cursor.execute('''
-        INSERT INTO issues (url, repo_name, org_slug, issue_number, title, created_at, updated_at, state, labels, body_preview, comments_count, author, assignee_status, milestone, classified_tags, first_seen_at, last_seen_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+        INSERT INTO issues (url, repo_name, org_slug, issue_number, title, created_at, updated_at, state, labels, body_preview, comments_count, author, assignee_status, milestone, classified_tags, first_seen_at, last_seen_at, discussion_context)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, ?)
         ON CONFLICT(url) DO UPDATE SET
             title=excluded.title,
             updated_at=excluded.updated_at,
             state=excluded.state,
             labels=excluded.labels,
             body_preview=excluded.body_preview,
+            discussion_context=excluded.discussion_context,
             comments_count=excluded.comments_count,
             assignee_status=excluded.assignee_status,
             milestone=excluded.milestone,
             classified_tags=excluded.classified_tags,
             last_seen_at=CURRENT_TIMESTAMP
-        ''', (url, repo_name, org_slug, issue_number, title, created_at, updated_at, state, labels, body_preview, comments_count, author, assignee_status, milestone, tags_str))
+        ''', (url, repo_name, org_slug, issue_number, title, created_at, updated_at, state, labels, body_preview, comments_count, author, assignee_status, milestone, tags_str, discussion_context))
         conn.commit()
 
 def save_pull_request(url, pr_number, repo_name, title, state, created_at, updated_at, merged_at, author, review_comments_count):

@@ -194,7 +194,7 @@ def _inject_provider_entry(runtime_home, *, provider_id, model, base_url, api_ke
     # The mirrored config otherwise still names the local/custom (Ollama)
     # endpoint from ~/.hermes/config.yaml; ``--provider`` overrides it at
     # runtime, but leaving a stale local base_url in the child config is what
-    # previously sent ``auto/coding:free`` to Ollama. A provider-handoff run
+    # previously sent ``opencode-zen/nemotron-3.5-lightning-free`` to Ollama. A provider-handoff run
     # must carry a single, unambiguous provider: the endpoint URL and the env
     # var NAME of the credential, never the credential value.
     root_model = {
@@ -364,9 +364,11 @@ def research(issue_id_or_url):
     from src.run_log import log_event
     print(f"Running Real Hermes Research for Issue {issue_id_or_url}...")
     try:
-        from src.autonomous_guard import get_hermes_execution_plan
+        from src.autonomous_guard import get_hermes_execution_handoff
 
-        execution_ok, selected_model, execution_reason = get_hermes_execution_plan()
+        execution_ok, selected_model, execution_reason, provider_config = (
+            get_hermes_execution_handoff(task_type="heavy")
+        )
         if not execution_ok:
             print(f"Research deferred: {execution_reason}")
             log_event(
@@ -418,17 +420,20 @@ Output a structured Markdown research report with the following sections exactly
 CRITICAL INSTRUCTIONS:
 - You must distinguish FACT (verifiable from context), INFERENCE (your deduction), and UNCERTAINTY (missing info). Use these exact prefixes in your bullet points (e.g., "[FACT] The issue mentions...", "[INFERENCE] The bug might be in...", "[UNCERTAINTY] We don't know if...").
 - Do not invent repository facts or files outside of the provided context. If evidence is insufficient, state it as [UNCERTAINTY].
+- Carefully analyze the Discussion Context below. Distinguish between unresolved maintainer questions vs decisions already made, questions already answered by maintainers/contributors, or work already in progress.
 
 CONTEXT:
 Repository: {issue['repo_name']}
 Organization: {issue['org_slug']}
 Issue Title: {issue['title']}
-Issue Body: {issue['body_preview'] or 'No description provided.'}
 Labels: {issue['labels']}
 Status/Activity: {issue['activity_status']}
 Contribution Score: {issue['contribution_value_score']}
 GSoC Score: {issue['gsoc_preparation_score']}
 Personal Fit Score: {issue['opportunity_score']}
+
+Discussion Context:
+{issue.get('discussion_context') or issue.get('body_preview') or 'No description provided.'}
 
 """
     if repo_analysis:
@@ -442,7 +447,12 @@ Known AI Policy Constraints: No AI-generated code push without human review.
     prompt += "\nOutput ONLY the Markdown report."
 
     try:
-        response = run_hermes_oneshot(prompt, safe_mode=True, model=selected_model)
+        response = run_hermes_oneshot(
+            prompt,
+            safe_mode=True,
+            model=selected_model,
+            **_oneshot_provider_kwargs(provider_config),
+        )
 
         with open(raw_file, "w") as f:
             f.write(response)

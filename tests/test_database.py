@@ -69,3 +69,31 @@ def test_save_issue():
     
     stats = database.get_stats()
     assert stats['issues'] == 1
+
+
+def test_save_issue_with_discussion_context():
+    disc_text = "=== ISSUE BODY ===\nFull issue text\n=== DISCUSSION HISTORY ===\n[Comment #1 by Maintainer]: Use Option A"
+    database.save_issue(
+        url="https://github.com/test/repo/issues/2",
+        repo_name="test-repo",
+        org_slug="test-org",
+        issue_number=2,
+        title="Test Issue 2",
+        created_at="2026-01-01T00:00:00Z",
+        updated_at="2026-01-01T00:00:00Z",
+        state="OPEN",
+        labels="[]",
+        body_preview="Full issue text",
+        comments_count=1,
+        author="testauthor",
+        assignee_status="UNASSIGNED",
+        milestone=None,
+        discussion_context=disc_text
+    )
+    with database.get_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute("SELECT discussion_context FROM issues WHERE url = 'https://github.com/test/repo/issues/2'")
+        row = cursor.fetchone()
+        assert row is not None
+        assert row[0] == disc_text
+

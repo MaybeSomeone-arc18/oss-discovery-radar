@@ -275,6 +275,7 @@ def test_implementation_never_falls_back_to_3b_with_abundant_resources():
         models=LOCAL_MODELS,
         resources_ok=True,
         resource_msg="Resources sufficient",
+        omniroute_available=False,
     )
     assert ok is False
     assert model is None

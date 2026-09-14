@@ -24,7 +24,7 @@ def _extract_section(research_content, name):
     to the next H1/H2/H3 heading or the end of the document.
     """
     pattern = r"^#{1,3} " + re.escape(name) + r"[ \t]*$"
-    heading = re.compile(pattern, re.MULTILINE)
+    heading = re.compile(pattern, re.MULTILINE | re.IGNORECASE)
     match = heading.search(research_content)
     if not match:
         return ""
@@ -125,6 +125,7 @@ CRITICAL:
 - Prefer asking the maintainer when the recommended implementation depends
   on unresolved maintainer intent, product direction, release targeting,
   scope, or architectural choice.
+- Check whether maintainers have already made decisions or answered questions in the issue discussion before concluding that clarification is needed.
 - Do not invent maintainer preferences.
 - Do not send the reply.
 
@@ -132,7 +133,7 @@ ISSUE:
 Repository: {issue['repo_name']}
 Title: {issue['title']}
 URL: {issue['url']}
-Description: {issue.get('body_preview') or 'No description available.'}
+Discussion & Context: {issue.get('discussion_context') or issue.get('body_preview') or 'No description available.'}
 
 COMMUNICATION-RELEVANT RESEARCH:
 {communication_context}
@@ -175,7 +176,7 @@ COMMUNICATION-RELEVANT RESEARCH:
     elif "NO_CLARIFICATION_NEEDED" in recommendation_text:
         status = "NOT_REQUIRED"
     else:
-        raise RuntimeError("Hermes returned an invalid communication recommendation.")
+        raise RuntimeError(f"Hermes returned an invalid communication recommendation:\n{response}")
 
     if "BLOCK_UNTIL_REPLY" not in gate and "MAY_PROCEED" not in gate:
         raise RuntimeError("Hermes returned an invalid implementation gate.")

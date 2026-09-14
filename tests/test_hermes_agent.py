@@ -201,7 +201,7 @@ def test_run_hermes_oneshot_lightweight_has_no_provider_flag(monkeypatch, tmp_pa
 
 def test_run_hermes_oneshot_with_provider_config_targets_omniroute(monkeypatch, tmp_path):
     """A tool-required implementation run with the OmniRoute handoff must build
-    `hermes -z ... --model auto/coding:free --provider omniroute`, inject ONLY
+    `hermes -z ... --model opencode-zen/nemotron-3.5-lightning-free --provider omniroute`, inject ONLY
     the endpoint + env var NAME into the mirrored config (never the key value),
     and keep HERMES_HOME inside the workspace."""
     from src.hermes_agent import run_hermes_oneshot
@@ -238,7 +238,7 @@ def test_run_hermes_oneshot_with_provider_config_targets_omniroute(monkeypatch, 
 
     result = run_hermes_oneshot(
         "prompt text",
-        model="auto/coding:free",
+        model="opencode-zen/nemotron-3.5-lightning-free",
         provider_id="omniroute",
         base_url="http://127.0.0.1:20128/v1",
         api_key_env="OMNIROUTE_API_KEY",
@@ -250,7 +250,7 @@ def test_run_hermes_oneshot_with_provider_config_targets_omniroute(monkeypatch, 
         "-z",
         "prompt text",
         "--model",
-        "auto/coding:free",
+        "opencode-zen/nemotron-3.5-lightning-free",
         "--provider",
         "omniroute",
     ]
@@ -290,7 +290,7 @@ def test_run_hermes_oneshot_provider_config_requires_endpoint(monkeypatch, tmp_p
     with pytest.raises(ValueError, match="provider_id requires base_url"):
         run_hermes_oneshot(
             "prompt text",
-            model="auto/coding:free",
+            model="opencode-zen/nemotron-3.5-lightning-free",
             provider_id="omniroute",
         )
 
@@ -361,14 +361,14 @@ def test_research_command(mock_run, mock_analysis, mock_context, tmp_path):
     mock_run.return_value = "[FACT] The issue is simple."
 
     with patch(
-        "src.autonomous_guard.get_hermes_execution_plan",
-        return_value=(True, "llama3.2:3b", "validated"),
+        "src.autonomous_guard.get_hermes_execution_handoff",
+        return_value=(True, "opencode-zen/nemotron-3.5-lightning-free", "validated", None),
     ):
         with patch("src.hermes_agent.get_reports_dir", return_value=tmp_path):
             result = research(123)
             assert result is True
             mock_run.assert_called_once()
-            assert mock_run.call_args.kwargs["model"] == "llama3.2:3b"
+            assert mock_run.call_args.kwargs["model"] == "opencode-zen/nemotron-3.5-lightning-free"
             assert (tmp_path / "research.md").exists()
             assert (tmp_path / "research.md").read_text() == "[FACT] The issue is simple."
 
@@ -386,7 +386,7 @@ def test_plan_passes_selected_model_to_hermes(monkeypatch, tmp_path):
 
     def fake_execution_plan(task_type="lightweight"):
         plan_calls.append(task_type)
-        return (True, "auto/coding:free", "validated", None)
+        return (True, "opencode-zen/nemotron-3.5-lightning-free", "validated", None)
 
     monkeypatch.setattr(
         "src.autonomous_guard.get_hermes_execution_handoff",
@@ -416,7 +416,7 @@ def test_plan_passes_selected_model_to_hermes(monkeypatch, tmp_path):
     monkeypatch.setattr("src.hermes_agent.run_hermes_oneshot", fake_run)
 
     assert plan(123) is True
-    assert captured["model"] == "auto/coding:free"
+    assert captured["model"] == "opencode-zen/nemotron-3.5-lightning-free"
     assert (tmp_path / "plan.md").read_text() == "[FACT] Plan"
     # Planning is reasoning-heavy: it always requests the heavy (OmniRoute) route.
     assert plan_calls == ["heavy"]
@@ -567,17 +567,17 @@ def test_implement_issue_with_hermes_passes_provider_config(monkeypatch, tmp_pat
         "provider_id": "omniroute",
         "base_url": "http://127.0.0.1:20128/v1",
         "api_key_env": "OMNIROUTE_API_KEY",
-        "model": "auto/coding:free",
+        "model": "opencode-zen/nemotron-3.5-lightning-free",
     }
     result = implement_issue_with_hermes(
         tmp_path,
         "Issue Title: Test\nPLAN:\nDo the thing",
-        model="auto/coding:free",
+        model="opencode-zen/nemotron-3.5-lightning-free",
         provider_config=provider_config,
     )
 
     assert result == "implemented"
-    assert captured["model"] == "auto/coding:free"
+    assert captured["model"] == "opencode-zen/nemotron-3.5-lightning-free"
     assert captured["provider_id"] == "omniroute"
     assert captured["base_url"] == "http://127.0.0.1:20128/v1"
     assert captured["api_key_env"] == "OMNIROUTE_API_KEY"
@@ -623,3 +623,43 @@ def test_get_issue_context_by_url(monkeypatch):
     assert issue["url"] == "https://github.com/example/repo/issues/25"
     assert issue["issue_number"] == 25
     assert issue["repo_name"] == "example/repo"
+
+
+def test_research_passes_discussion_context_to_prompt(monkeypatch, tmp_path):
+    import src.hermes_agent as hermes
+    from pathlib import Path
+
+    mock_issue = {
+        "org_slug": "checkstyle",
+        "repo_name": "checkstyle/checkstyle",
+        "issue_number": 21480,
+        "title": "Discussion aware test issue",
+        "body_preview": "Truncated body preview",
+        "discussion_context": "=== ISSUE BODY ===\nFull issue text\n=== DISCUSSION HISTORY ===\n[Comment #1 by Maintainer (MEMBER)]: Decision reached, proceed with fix.",
+        "labels": "[]",
+        "activity_status": "HIGH",
+        "contribution_value_score": 80.0,
+        "gsoc_preparation_score": 90.0,
+        "opportunity_score": 85.0
+    }
+
+    monkeypatch.setattr(hermes, "get_issue_context", lambda issue_id: mock_issue)
+    monkeypatch.setattr(hermes, "get_repo_analysis", lambda repo: {})
+    monkeypatch.setattr(hermes, "WORKSPACES_ROOT", tmp_path)
+
+    fake_handoff = (True, "mock_model", "ok", {})
+    monkeypatch.setattr("src.autonomous_guard.get_hermes_execution_handoff", lambda task_type: fake_handoff)
+
+    captured_prompt = []
+    def mock_run_oneshot(prompt, safe_mode=True, model=None, **kwargs):
+        captured_prompt.append(prompt)
+        return "# Issue summary\n[FACT] Summary\n## Questions for maintainers\n- None\n## Recommended next step\nProceed."
+
+    monkeypatch.setattr(hermes, "run_hermes_oneshot", mock_run_oneshot)
+
+    res = hermes.research(21480)
+    assert res is True
+    assert len(captured_prompt) == 1
+    assert "Decision reached, proceed with fix." in captured_prompt[0]
+    assert "=== DISCUSSION HISTORY ===" in captured_prompt[0]
+

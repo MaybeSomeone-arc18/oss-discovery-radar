@@ -51,9 +51,22 @@ def fetch_contributions(limit=20):
                 createdAt
                 updatedAt
                 url
-                author { login }
+                author {
+                  login
+                  association: authorAssociation
+                }
                 assignees(first: 1) { totalCount }
-                comments { totalCount }
+                comments(last: 15) {
+                  totalCount
+                  nodes {
+                    author {
+                      login
+                      association: authorAssociation
+                    }
+                    bodyText
+                    createdAt
+                  }
+                }
                 labels(first: 10) { nodes { name } }
                 milestone { title }
               }
@@ -93,16 +106,27 @@ def fetch_contributions(limit=20):
             continue
             
         # Process Issues
+        from src.github_client import format_discussion_context
         issues = repo_data.get('issues', {}).get('nodes', [])
         for issue in issues:
             labels = [lbl['name'] for lbl in issue.get('labels', {}).get('nodes', [])]
             assignee_status = "ASSIGNED" if issue.get('assignees', {}).get('totalCount', 0) > 0 else "UNASSIGNED"
-            author = issue.get('author', {}).get('login') if issue.get('author') else "Unknown"
+            author_data = issue.get('author') or {}
+            author = author_data.get('login', 'Unknown')
+            author_assoc = author_data.get('association')
             milestone = issue.get('milestone', {}).get('title') if issue.get('milestone') else None
             
             # Extract tags using our classifier
             tags = extract_tags([issue['title'], issue['bodyText'], ", ".join(labels)])
             
+            comments_data = issue.get('comments', {}).get('nodes', [])
+            discussion_ctx = format_discussion_context(
+                issue.get('bodyText', ''),
+                author,
+                author_assoc,
+                comments_data
+            )
+
             save_issue(
                 url=issue['url'],
                 repo_name=repo_name,
@@ -118,7 +142,8 @@ def fetch_contributions(limit=20):
                 author=author,
                 assignee_status=assignee_status,
                 milestone=milestone,
-                classified_tags=tags
+                classified_tags=tags,
+                discussion_context=discussion_ctx
             )
             
         # Process PRs

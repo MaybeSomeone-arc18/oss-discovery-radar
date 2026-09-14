@@ -7,6 +7,55 @@ def build_search_query(org, timestamp_str):
     return f'is:issue is:open no:assignee org:{org} created:>{timestamp_str} label:"good first issue",bug,documentation,"help wanted"'
 
 
+def format_discussion_context(body_text, author_login="Unknown", author_association=None, comments_nodes=None):
+    """Format issue body and recent comments into bounded, attributed discussion context.
+
+    Bounding strategy:
+    - Issue body is truncated to max 4000 characters if exceptionally long.
+    - Up to 15 recent comments are retrieved.
+    - Each comment body is truncated to max 1000 characters.
+    - Author identity and role (Maintainer vs Contributor) are explicitly attributed.
+    """
+    MAINTAINER_ASSOCIATIONS = {"MEMBER", "OWNER", "COLLABORATOR"}
+    CONTRIBUTOR_ASSOCIATIONS = {"CONTRIBUTOR", "FIRST_TIME_CONTRIBUTOR", "FIRST_TIMER"}
+
+    def _get_role(login, assoc):
+        if not assoc:
+            return f"User ({login})"
+        assoc_upper = assoc.upper()
+        if assoc_upper in MAINTAINER_ASSOCIATIONS:
+            return f"Maintainer ({login}, {assoc_upper})"
+        elif assoc_upper in CONTRIBUTOR_ASSOCIATIONS:
+            return f"Contributor ({login}, {assoc_upper})"
+        else:
+            return f"Community Member ({login}, {assoc_upper})"
+
+    body = (body_text or "").strip()
+    if len(body) > 4000:
+        body = body[:4000] + "\n[...issue body truncated...]"
+
+    body_role = _get_role(author_login or "Unknown", author_association)
+    parts = [f"=== ISSUE BODY (by {body_role}) ===\n{body if body else 'No description provided.'}"]
+
+    comments = comments_nodes or []
+    if comments:
+        parts.append(f"\n=== DISCUSSION HISTORY (showing last {len(comments)} comments) ===")
+        for idx, comment in enumerate(comments, 1):
+            c_author = comment.get("author", {}) if isinstance(comment.get("author"), dict) else {}
+            c_login = c_author.get("login", "Unknown")
+            c_assoc = c_author.get("association") or comment.get("authorAssociation")
+            c_role = _get_role(c_login, c_assoc)
+            c_created = comment.get("createdAt", "")
+            c_body = (comment.get("bodyText") or comment.get("body") or "").strip()
+            if len(c_body) > 1000:
+                c_body = c_body[:1000] + "\n[...comment truncated...]"
+            
+            header = f"[Comment #{idx} by {c_role} at {c_created}]:"
+            parts.append(f"\n{header}\n{c_body if c_body else '(empty comment)'}")
+
+    return "\n".join(parts)
+
+
 def fetch_issues():
     if not GITHUB_TOKEN:
         raise ValueError("GITHUB_TOKEN is not set in the environment.")
@@ -27,6 +76,21 @@ def fetch_issues():
               url
               createdAt
               bodyText
+              author {
+                login
+                association: authorAssociation
+              }
+              comments(last: 15) {
+                totalCount
+                nodes {
+                  author {
+                    login
+                    association: authorAssociation
+                  }
+                  bodyText
+                  createdAt
+                }
+              }
               repository {
                 nameWithOwner
                 url
@@ -75,6 +139,17 @@ def fetch_issues():
                 continue
                 
             labels = [label["name"] for label in node.get("labels", {}).get("nodes", [])]
+            author_data = node.get("author") or {}
+            author_login = author_data.get("login", "Unknown")
+            author_assoc = author_data.get("association")
+            
+            comments_data = node.get("comments", {}).get("nodes", [])
+            discussion_ctx = format_discussion_context(
+                node.get("bodyText", ""),
+                author_login,
+                author_assoc,
+                comments_data
+            )
             
             issue = {
                 "title": node.get("title"),
@@ -83,7 +158,9 @@ def fetch_issues():
                 "repo_url": node.get("repository", {}).get("url"),
                 "created_at": node.get("createdAt"),
                 "labels": labels,
-                "body_preview": node.get("bodyText", "")[:200] + "..." if node.get("bodyText") else ""
+                "author": author_login,
+                "body_preview": node.get("bodyText", "")[:200] + "..." if node.get("bodyText") else "",
+                "discussion_context": discussion_ctx
             }
             issues.append(issue)
 
