@@ -43,7 +43,7 @@ def select_execution_provider(
       * "lightweight" -- llama3.2:3b stays the default; OmniRoute is never
         probed or used.
       * "heavy" -- text-generation reasoning tasks (communication analysis,
-        planning, final review). OmniRoute (auto/coding:free) is used when
+        planning, final review). OmniRoute (opencode-zen/nemotron-3.5-lightning-free) is used when
         available; otherwise fall back to llama3.2:3b when local resources
         permit; otherwise defer.
       * "implementation" -- tool-required tasks that must actually edit files

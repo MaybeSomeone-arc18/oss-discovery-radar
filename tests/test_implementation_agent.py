@@ -22,7 +22,7 @@ HANDOFF = {
     "provider_id": "omniroute",
     "base_url": "http://127.0.0.1:20128/v1",
     "api_key_env": "OMNIROUTE_API_KEY",
-    "model": "auto/coding:free",
+    "model": "opencode-zen/nemotron-3.5-lightning-free",
 }
 
 
@@ -169,7 +169,7 @@ class TestImplementationIntegration:
         monkeypatch.setattr("src.implementer.create_worktree", lambda *a: worktree_dir)
         monkeypatch.setattr("src.implementer.requests.get", lambda *a, **k: MagicMock(status_code=200, json=lambda: {"title": "Test"}))
         monkeypatch.setattr("src.implementer.get_reports_dir", lambda *a: reports_dir)
-        monkeypatch.setattr("src.implementer.get_hermes_execution_handoff", lambda **kwargs: (True, "auto/coding:free", "OK", HANDOFF))
+        monkeypatch.setattr("src.implementer.get_hermes_execution_handoff", lambda **kwargs: (True, "opencode-zen/nemotron-3.5-lightning-free", "OK", HANDOFF))
         monkeypatch.setattr("src.implementer.get_issue_context_by_url", lambda *a: {"url": "http://test/1", "issue_number": 1, "org_slug": "test", "repo_name": "test/repo", "title": "Test", "body_preview": "body"})
         monkeypatch.setattr("src.opportunity_manager.communication_allows_implementation", lambda *a: True)
         monkeypatch.setattr("src.opportunity_manager.transition_status", lambda *a, **k: None)
@@ -197,7 +197,7 @@ class TestImplementationIntegration:
         monkeypatch.setattr("src.implementer.create_worktree", lambda *a: worktree_dir)
         monkeypatch.setattr("src.implementer.requests.get", lambda *a, **k: MagicMock(status_code=200, json=lambda: {"title": "Test"}))
         monkeypatch.setattr("src.implementer.get_reports_dir", lambda *a: reports_dir)
-        monkeypatch.setattr("src.implementer.get_hermes_execution_handoff", lambda **kwargs: (True, "auto/coding:free", "OK", HANDOFF))
+        monkeypatch.setattr("src.implementer.get_hermes_execution_handoff", lambda **kwargs: (True, "opencode-zen/nemotron-3.5-lightning-free", "OK", HANDOFF))
         monkeypatch.setattr("src.implementer.get_issue_context_by_url", lambda *a: {"url": "http://test/1", "issue_number": 1, "org_slug": "test", "repo_name": "test/repo", "title": "Test", "body_preview": "body"})
         monkeypatch.setattr("src.opportunity_manager.communication_allows_implementation", lambda *a: True)
         monkeypatch.setattr("src.opportunity_manager.transition_status", lambda *a, **k: None)

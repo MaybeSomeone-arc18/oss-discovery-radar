@@ -23,7 +23,7 @@ from dotenv import load_dotenv
 load_dotenv()
 
 OMNIROUTE_BASE_URL_DEFAULT = "http://127.0.0.1:20128/v1"
-OMNIROUTE_MODEL_DEFAULT = "auto/coding:free"
+OMNIROUTE_MODEL_DEFAULT = "opencode-zen/nemotron-3.5-lightning-free"
 OMNIROUTE_MODELS_ENDPOINT = "/models"
 
 # Hermes-side identity of the OmniRoute execution provider. The app registers a
@@ -112,7 +112,7 @@ def get_omniroute_hermes_provider_config():
             "provider_id": "omniroute",          # Hermes providers: entry id
             "base_url": "http://127.0.0.1:20128/v1",
             "api_key_env": "OMNIROUTE_API_KEY",  # env var NAME, never the value
-            "model": "auto/coding:free",
+            "model": "opencode-zen/nemotron-3.5-lightning-free",
         }
 
     The credential VALUE is never returned or persisted: the Hermes child reads

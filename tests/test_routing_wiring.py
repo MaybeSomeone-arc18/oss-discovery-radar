@@ -25,7 +25,7 @@ HANDOFF = {
     "provider_id": "omniroute",
     "base_url": "http://127.0.0.1:20128/v1",
     "api_key_env": "OMNIROUTE_API_KEY",
-    "model": "auto/coding:free",
+    "model": "opencode-zen/nemotron-3.5-lightning-free",
 }
 
 ISSUE_BASE = {
@@ -54,7 +54,7 @@ def test_communication_analysis_invokes_heavy_route(monkeypatch, tmp_path):
 
     def fake_plan(task_type="lightweight"):
         calls.append(task_type)
-        return (True, "auto/coding:free", "validated", None)
+        return (True, "opencode-zen/nemotron-3.5-lightning-free", "validated", None)
 
     monkeypatch.setattr(
         "src.communication_gate.get_hermes_execution_handoff", fake_plan
@@ -97,7 +97,7 @@ def test_communication_analysis_invokes_heavy_route(monkeypatch, tmp_path):
     )
 
     assert calls == ["heavy"]
-    assert captured["model"] == "auto/coding:free"
+    assert captured["model"] == "opencode-zen/nemotron-3.5-lightning-free"
     assert result["status"] == "NOT_REQUIRED"
 
 
@@ -109,7 +109,7 @@ def test_difficult_planning_invokes_heavy_route(monkeypatch, tmp_path):
 
     def fake_plan(task_type="lightweight"):
         calls.append(task_type)
-        return (True, "auto/coding:free", "validated", None)
+        return (True, "opencode-zen/nemotron-3.5-lightning-free", "validated", None)
 
     monkeypatch.setattr(
         "src.autonomous_guard.get_hermes_execution_handoff", fake_plan
@@ -138,7 +138,7 @@ def test_planning_now_always_heavy(monkeypatch, tmp_path):
 
     def fake_plan(task_type="lightweight"):
         calls.append(task_type)
-        return (True, "auto/coding:free", "validated", None)
+        return (True, "opencode-zen/nemotron-3.5-lightning-free", "validated", None)
 
     monkeypatch.setattr(
         "src.autonomous_guard.get_hermes_execution_handoff", fake_plan
@@ -170,7 +170,7 @@ def test_final_review_invokes_heavy_route(monkeypatch, tmp_path):
 
     def fake_plan(task_type="lightweight"):
         calls.append(task_type)
-        return (True, "auto/coding:free", "validated", None)
+        return (True, "opencode-zen/nemotron-3.5-lightning-free", "validated", None)
 
     monkeypatch.setattr(
         "src.implementer.get_hermes_execution_handoff", fake_plan
@@ -194,7 +194,7 @@ def test_final_review_invokes_heavy_route(monkeypatch, tmp_path):
 
     assert calls == ["heavy"]
     # First Hermes call is the final code review, on the heavy model.
-    assert run_calls[0]["model"] == "auto/coding:free"
+    assert run_calls[0]["model"] == "opencode-zen/nemotron-3.5-lightning-free"
     assert (tmp_path / "review.md").read_text() == "[FACT] Review"
 
 
@@ -241,7 +241,7 @@ def test_implement_preflight_uses_implementation_routing(monkeypatch, tmp_path):
 
     def fake_plan(**kwargs):
         calls.append(kwargs)
-        return (True, "auto/coding:free", "validated", HANDOFF)
+        return (True, "opencode-zen/nemotron-3.5-lightning-free", "validated", HANDOFF)
 
     monkeypatch.setattr(
         "src.implementer.get_hermes_execution_handoff", fake_plan

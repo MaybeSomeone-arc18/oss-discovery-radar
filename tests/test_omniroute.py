@@ -28,13 +28,13 @@ def test_omniroute_config_resolves_when_configured(monkeypatch):
     """a. OmniRoute config resolves correctly when configured."""
     monkeypatch.setenv("OMNIROUTE_API_KEY", "secret-key")
     monkeypatch.setenv("OMNIROUTE_BASE_URL", "http://127.0.0.1:20128/v1")
-    monkeypatch.setenv("OMNIROUTE_MODEL", "auto/coding:free")
+    monkeypatch.setenv("OMNIROUTE_MODEL", "opencode-zen/nemotron-3.5-lightning-free")
 
     config = get_omniroute_config()
 
     assert config == {
         "base_url": "http://127.0.0.1:20128/v1",
-        "model": "auto/coding:free",
+        "model": "opencode-zen/nemotron-3.5-lightning-free",
         "api_key": "secret-key",
     }
 
@@ -70,7 +70,7 @@ def test_omniroute_hermes_provider_config_carries_env_name_not_value(monkeypatch
     """The handoff config names the env var but never contains the key value."""
     monkeypatch.setenv("OMNIROUTE_API_KEY", "super-secret-omniroute-key-123")
     monkeypatch.setenv("OMNIROUTE_BASE_URL", "http://127.0.0.1:20128/v1")
-    monkeypatch.setenv("OMNIROUTE_MODEL", "auto/coding:free")
+    monkeypatch.setenv("OMNIROUTE_MODEL", "opencode-zen/nemotron-3.5-lightning-free")
 
     cfg = get_omniroute_hermes_provider_config()
 
@@ -78,7 +78,7 @@ def test_omniroute_hermes_provider_config_carries_env_name_not_value(monkeypatch
         "provider_id": OMNIROUTE_HERMES_PROVIDER_ID,
         "base_url": "http://127.0.0.1:20128/v1",
         "api_key_env": OMNIROUTE_API_KEY_ENV_NAME,
-        "model": "auto/coding:free",
+        "model": "opencode-zen/nemotron-3.5-lightning-free",
     }
     # The credential VALUE must never appear in the handoff config.
     assert "super-secret-omniroute-key-123" not in str(cfg)

@@ -16,7 +16,7 @@ HANDOFF = {
     "provider_id": "omniroute",
     "base_url": "http://127.0.0.1:20128/v1",
     "api_key_env": "OMNIROUTE_API_KEY",
-    "model": "auto/coding:free",
+    "model": "opencode-zen/nemotron-3.5-lightning-free",
 }
 
 @pytest.fixture(autouse=True)
@@ -84,7 +84,7 @@ def test_guardrails_main_branch_modification():
 def test_successful_implementation(monkeypatch, tmp_path):
     monkeypatch.setattr(
         "src.implementer.get_hermes_execution_handoff",
-        lambda **kwargs: (True, "auto/coding:free", "validated", HANDOFF),
+        lambda **kwargs: (True, "opencode-zen/nemotron-3.5-lightning-free", "validated", HANDOFF),
     )
 
     monkeypatch.setattr(
@@ -133,7 +133,7 @@ def test_successful_implementation(monkeypatch, tmp_path):
     monkeypatch.setattr("builtins.open", mock_open(read_data="plan"))
     implement(999)
 
-    assert captured["model"] == "auto/coding:free"
+    assert captured["model"] == "opencode-zen/nemotron-3.5-lightning-free"
     # The explicit execution-provider config reaches the Hermes implementation call.
     assert captured["provider_config"] == HANDOFF
 
@@ -165,13 +165,13 @@ def test_failed_implementation_repair_loop(mock_open, mock_exists, mock_gen_repo
     
     with patch(
         "src.implementer.get_hermes_execution_handoff",
-        return_value=(True, "auto/coding:free", "validated", HANDOFF),
+        return_value=(True, "opencode-zen/nemotron-3.5-lightning-free", "validated", HANDOFF),
     ):
         implement(999)
     
     # Repair should be called exactly once
     assert mock_repair.call_count == 1
-    assert mock_repair.call_args.kwargs["model"] == "auto/coding:free"
+    assert mock_repair.call_args.kwargs["model"] == "opencode-zen/nemotron-3.5-lightning-free"
     assert mock_repair.call_args.kwargs["provider_config"] == HANDOFF
     
     # Should end in failed state
@@ -214,7 +214,7 @@ def test_implementation_marks_in_progress_before_hermes(
 
     mock_run_tests.return_value = [{"framework": "pytest", "result": {"success": True}}]
 
-    mock_plan.return_value = (True, "auto/coding:free", "validated", HANDOFF)
+    mock_plan.return_value = (True, "opencode-zen/nemotron-3.5-lightning-free", "validated", HANDOFF)
     from src.opportunity_manager import get_history
 
     assert get_history("http://test/999")["lifecycle_status"] == "PLANNED"
@@ -261,7 +261,7 @@ def test_implement_blocks_without_communication_approval(monkeypatch):
     monkeypatch.setattr(
         implementer,
         "get_hermes_execution_handoff",
-        lambda **kwargs: (True, "auto/coding:free", "validated", HANDOFF),
+        lambda **kwargs: (True, "opencode-zen/nemotron-3.5-lightning-free", "validated", HANDOFF),
     )
     monkeypatch.setattr(
         implementer,
@@ -318,7 +318,7 @@ def test_implement_allows_approved_communication(monkeypatch, tmp_path):
     monkeypatch.setattr(
         implementer,
         "get_hermes_execution_handoff",
-        lambda **kwargs: (True, "auto/coding:free", "validated", HANDOFF),
+        lambda **kwargs: (True, "opencode-zen/nemotron-3.5-lightning-free", "validated", HANDOFF),
     )
     plan_dir = tmp_path / "reports"
     plan_dir.mkdir()
@@ -469,7 +469,7 @@ def test_generate_reports_implementation_diff(monkeypatch, tmp_path):
         return '[FACT] Implementation details'
         
     monkeypatch.setattr('src.implementer.run_hermes_oneshot', fake_run)
-    monkeypatch.setattr('src.implementer.get_hermes_execution_handoff', lambda task_type: (True, 'auto/coding:free', 'ok', None))
+    monkeypatch.setattr('src.implementer.get_hermes_execution_handoff', lambda task_type: (True, 'opencode-zen/nemotron-3.5-lightning-free', 'ok', None))
     
     generate_reports(123, tmp_path, tmp_path, None, '+++ b/some_file.py', True)
     
