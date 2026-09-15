@@ -363,7 +363,7 @@ def test_communication_gate_considers_discussion_context(monkeypatch, tmp_path):
 
     monkeypatch.setattr(gate, "run_hermes_oneshot", mock_run_oneshot)
     monkeypatch.setattr("src.autonomous_guard.get_hermes_execution_handoff", lambda task_type: (True, "mock-model", "ok", {}))
-    monkeypatch.setattr(gate, "set_communication_recommendation", lambda issue_url, reply, reason: None)
+    monkeypatch.setattr(gate, "set_communication_recommendation", lambda issue_url, reply, reason, status=None: None)
 
     res = gate.generate_communication_recommendation("https://github.com/checkstyle/checkstyle/issues/21480")
 

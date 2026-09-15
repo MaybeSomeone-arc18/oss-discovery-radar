@@ -45,18 +45,18 @@ def transition_status(issue_url, new_status, reason=None, notes=None, difficulty
         cursor.execute(query, params)
         conn.commit()
 
-def set_communication_recommendation(issue_url, recommendation, reason):
+def set_communication_recommendation(issue_url, recommendation, reason, status="REVIEW_REQUIRED"):
     with get_connection() as conn:
         conn.execute(
             """
             UPDATE issues
-            SET communication_status = 'REVIEW_REQUIRED',
+            SET communication_status = ?,
                 communication_recommendation = ?,
                 communication_reason = ?,
                 communication_approved_at = NULL
             WHERE url = ?
             """,
-            (recommendation, reason, issue_url),
+            (status, recommendation, reason, issue_url),
         )
         conn.commit()
 

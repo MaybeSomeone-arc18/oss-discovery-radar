@@ -195,6 +195,7 @@ COMMUNICATION-RELEVANT RESEARCH:
         issue_url,
         reply,
         reason,
+        status,
     )
 
     return {
