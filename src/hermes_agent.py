@@ -152,6 +152,12 @@ def _prepare_hermes_child_env():
 
     child_env = os.environ.copy()
     child_env["HERMES_HOME"] = str(runtime_home)
+    
+    # Isolate temporary files to the runtime directory so sandbox-exec allows them
+    runtime_tmp = runtime_home / "tmp"
+    runtime_tmp.mkdir(parents=True, exist_ok=True)
+    child_env["TMPDIR"] = str(runtime_tmp)
+    
     return child_env
 
 def _inject_provider_entry(runtime_home, *, provider_id, model, base_url, api_key_env):
@@ -286,11 +292,31 @@ def run_hermes_oneshot(
     child reads it from the ``api_key_env`` environment variable at runtime,
     inherited from the Radar process environment via os.environ.copy().
     """
-    cmd = ["hermes", "-z", prompt]
+    import platform
+
+    child_env = _prepare_hermes_child_env()
+
+    cmd = ["hermes"]
+    if cwd and platform.system() == "Darwin":
+        runtime_home = child_env["HERMES_HOME"]
+        cwd_real = os.path.realpath(str(cwd))
+        runtime_real = os.path.realpath(str(runtime_home))
+        sandbox_profile = (
+            "(version 1) "
+            "(allow default) "
+            '(deny file-write* (subpath "/")) '
+            f'(allow file-write* (subpath "{cwd_real}")) '
+            f'(allow file-write* (subpath "{runtime_real}")) '
+            '(allow file-write* (subpath "/dev"))'
+        )
+        cmd = ["sandbox-exec", "-p", sandbox_profile] + cmd
+
+    if cwd:
+        cmd.extend(["--in", str(cwd), "--no-restore-cwd"])
+    cmd.extend(["-z", prompt])
     if model:
         cmd.extend(["--model", model])
 
-    child_env = _prepare_hermes_child_env()
     if provider_id:
         if not base_url or not api_key_env:
             raise ValueError(
@@ -602,6 +628,7 @@ CRITICAL IMPLEMENTATION INSTRUCTIONS:
 - Inspect the existing code first: find and read the relevant files, then create/modify exactly the files required by the issue.
 - You MUST directly create and edit files inside the current working directory (the isolated worktree).
 - Use shell commands to write files (for example: cat > path/to/file << 'ENDOFFILE' ... ENDOFFILE), or the file tool if available.
+- IMPORTANT CONSTRAINTS: To execute shell commands, you MUST use the `terminal` tool with ONLY the `command` parameter. Do NOT invent parameters like `output`. Emit a valid tool call, do not ask the user for permission.
 - After making changes, run `git diff` and `git status` to verify exactly which files were modified.
 - Do NOT output patches or descriptions instead of editing files — you MUST apply the changes to the filesystem.
 - Add/update tests where appropriate.
