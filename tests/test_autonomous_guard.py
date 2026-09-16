@@ -428,7 +428,7 @@ def test_implementation_task_routes_to_omniroute_when_available(monkeypatch):
         ok, model, reason = get_hermes_execution_plan("implementation")
 
     assert ok is True
-    assert model == OMNIROUTE_MODEL_DEFAULT
+    assert model == "openrouter/poolside/laguna-s-2.1:free"
     assert "tool-capable" in reason
     assert "qwen3.5:9b" not in model
 
@@ -501,13 +501,13 @@ def test_handoff_implementation_routes_to_omniroute_config(monkeypatch):
         )
 
     assert ok is True
-    assert model == "opencode-zen/nemotron-3.5-lightning-free"
+    assert model == "openrouter/poolside/laguna-s-2.1:free"
     assert "tool-capable" in reason
     assert provider_config == {
         "provider_id": "omniroute",
         "base_url": "http://127.0.0.1:20128/v1",
         "api_key_env": "OMNIROUTE_API_KEY",
-        "model": "opencode-zen/nemotron-3.5-lightning-free",
+        "model": "openrouter/poolside/laguna-s-2.1:free",
     }
     assert "super-secret-omniroute-key-123" not in str(provider_config)
 

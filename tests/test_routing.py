@@ -209,7 +209,7 @@ def test_implementation_routes_to_omniroute_when_available(monkeypatch):
         )
         assert mock_get.call_count == 1
     assert ok is True
-    assert model == OMNIROUTE_MODEL_DEFAULT
+    assert model == "openrouter/poolside/laguna-s-2.1:free"
     assert "tool-capable" in reason
 
 
@@ -223,7 +223,7 @@ def test_implementation_routes_to_omniroute_even_when_local_resources_ok(
             "implementation", 6000, models=LOCAL_MODELS, resources_ok=True
         )
     assert ok is True
-    assert model == OMNIROUTE_MODEL_DEFAULT
+    assert model == "openrouter/poolside/laguna-s-2.1:free"
 
 
 def test_implementation_defers_when_omniroute_not_configured(monkeypatch):

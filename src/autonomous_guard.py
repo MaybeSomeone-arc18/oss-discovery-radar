@@ -76,6 +76,13 @@ def select_execution_provider(
         omniroute_model = (
             config["model"] if config else OMNIROUTE_MODEL_DEFAULT
         )
+        if task_type == "implementation":
+            from src.implementation_models import get_eligible_models
+            eligible = get_eligible_models()
+            if not eligible:
+                return False, None, "No eligible FREE implementation models available in registry."
+            omniroute_model = eligible[0]["model_id"]
+
         if omniroute_model not in BLOCKED_MODELS:
             reason = (
                 "Implementation routed to OmniRoute provider (tool-capable)."
@@ -141,6 +148,8 @@ def _compute_hermes_execution_plan(task_type="lightweight"):
     provider_config = None
     if ok and omniroute_available:
         provider_config = get_omniroute_hermes_provider_config()
+        if provider_config:
+            provider_config["model"] = model
     return ok, model, reason, provider_config
 
 
