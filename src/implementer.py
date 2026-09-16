@@ -281,34 +281,100 @@ def implement(issue_id_or_url):
 
     context = f"Issue Title: {issue['title']}\nBody: {issue['body_preview']}\n\nPLAN:\n{plan_content}"
 
-    try:
-        implement_issue_with_hermes(
-            worktree_path,
-            context,
-            model=selected_model,
-            provider_config=execution_provider,
-        )
-        print("Hermes applied initial implementation.")
-    except Exception as e:
-        print(f"Implementation error: {e}")
+    from src.implementation_models import get_eligible_models, record_failure, record_success
+    from src.omniroute import get_omniroute_hermes_provider_config
+
+    eligible_models = get_eligible_models()
+    if not eligible_models:
+        print("Abort: No viable FREE implementation models available in registry.")
         transition_status(issue["url"], "IMPLEMENTATION_FAILED")
         os.environ.update(original_environ)
         return False, None, ""
 
-    # Check guardrails
-    passed_guardrails, guardrail_msg = check_diff_guardrails(worktree_path)
-    if not passed_guardrails:
-        print(f"Validation FAILED: {guardrail_msg}")
-        transition_status(issue["url"], "IMPLEMENTATION_FAILED")
-        os.environ.update(original_environ)
-        return False, None, ""
-
-    print("Guardrails passed. Running tests...")
-
-    # Validation Loop
+    max_model_attempts = 3
     success = False
     test_results = None
-    for iteration in range(2): # Max 2 iterations (initial + 1 repair)
+    diff_stat = ""
+
+    for attempt, m_entry in enumerate(eligible_models[:max_model_attempts]):
+        selected_model = m_entry["model_id"]
+        print(f"\n--- [Attempt {attempt+1}/{max_model_attempts}] Implementing with model: {selected_model} ---")
+        
+        execution_provider = get_omniroute_hermes_provider_config()
+        if execution_provider:
+            execution_provider["model"] = selected_model
+
+        repaired = False
+        try:
+            implement_issue_with_hermes(
+                worktree_path,
+                context,
+                model=selected_model,
+                provider_config=execution_provider,
+            )
+            print(f"Hermes applied initial implementation using {selected_model}.")
+        except Exception as e:
+            error_str = str(e)
+            print(f"Implementation error with {selected_model}: {e}")
+            
+            is_provider_health = False
+            for health_term in ["rate_limit", "rate limit", "cooldown", "timeout", "unreachable", "auth", "server_error", "server error", "5xx", "429"]:
+                if health_term in error_str.lower():
+                    is_provider_health = True
+                    record_failure(selected_model, health_term)
+                    break
+            
+            if is_provider_health:
+                print(f"Provider health issue detected for {selected_model}. Selecting next model...")
+                continue
+            
+            print(f"Implementation quality failure (e.g. no diff). Triggering bounded repair for {selected_model}...")
+            repaired = True
+            try:
+                repair_issue_with_hermes(
+                    worktree_path,
+                    context,
+                    error_str,
+                    model=selected_model,
+                    provider_config=execution_provider,
+                )
+                print("Repair attempt finished.")
+            except Exception as repair_e:
+                print(f"Repair attempt failed for {selected_model}: {repair_e}")
+                record_failure(selected_model, "implementation_repair_failed")
+                continue
+                
+        passed_guardrails, guardrail_msg = check_diff_guardrails(worktree_path)
+        if not passed_guardrails:
+            print(f"Validation FAILED: {guardrail_msg}")
+            if repaired:
+                print("Already repaired once, giving up on this model.")
+                record_failure(selected_model, "guardrail_failed")
+                continue
+                
+            print("Triggering repair for guardrail failure...")
+            repaired = True
+            try:
+                repair_issue_with_hermes(
+                    worktree_path,
+                    context,
+                    f"Guardrail failure: {guardrail_msg}",
+                    model=selected_model,
+                    provider_config=execution_provider,
+                )
+            except Exception as repair_e:
+                print(f"Repair attempt failed for {selected_model}: {repair_e}")
+                record_failure(selected_model, "guardrail_repair_failed")
+                continue
+
+            passed_guardrails, guardrail_msg = check_diff_guardrails(worktree_path)
+            if not passed_guardrails:
+                print(f"Validation FAILED after repair: {guardrail_msg}")
+                record_failure(selected_model, "guardrail_failed")
+                continue
+
+        print("Guardrails passed. Running tests...")
+
         test_results = discover_and_run_tests(worktree_path)
         all_passed = True
         for t in test_results:
@@ -318,35 +384,65 @@ def implement(issue_id_or_url):
 
         if all_passed:
             print("All detected tests passed!")
+            record_success(selected_model)
             success = True
             break
 
         if is_environment_failure(test_results):
             print("Validation blocked by environment/toolchain failure. Skipping Hermes repair.")
-            break
-        if iteration == 0:
-            print("Tests failed. Triggering repair loop...")
-            failure_logs = json.dumps(test_results, indent=2)
-            try:
-                repair_issue_with_hermes(
-                    worktree_path,
-                    context,
-                    failure_logs,
-                    model=selected_model,
-                    provider_config=execution_provider,
-                )
-            except Exception as e:
-                print(f"Repair error: {e}")
+            record_failure(selected_model, "env_failure")
+            continue
+            
+        if repaired:
+            print("Tests failed, but we already used our one repair attempt.")
+            record_failure(selected_model, "test_failure_post_repair")
+            continue
+
+        print("Tests failed. Triggering repair loop...")
+        repaired = True
+        failure_logs = json.dumps(test_results, indent=2)
+        try:
+            repair_issue_with_hermes(
+                worktree_path,
+                context,
+                failure_logs,
+                model=selected_model,
+                provider_config=execution_provider,
+            )
+        except Exception as e:
+            print(f"Repair error: {e}")
+            record_failure(selected_model, "test_repair_failed")
+            continue
+
+        passed_guardrails, guardrail_msg = check_diff_guardrails(worktree_path)
+        if not passed_guardrails:
+            print(f"Validation FAILED after repair: {guardrail_msg}")
+            record_failure(selected_model, "guardrail_failed_post_test")
+            continue
+
+        test_results = discover_and_run_tests(worktree_path)
+        all_passed = True
+        for t in test_results:
+            if not t["result"]["success"]:
+                all_passed = False
                 break
 
-            passed_guardrails, guardrail_msg = check_diff_guardrails(worktree_path)
-            if not passed_guardrails:
-                print(f"Validation FAILED after repair: {guardrail_msg}")
-                break
+        if all_passed:
+            print("All detected tests passed after repair!")
+            record_success(selected_model)
+            success = True
+            break
         else:
             print("Tests still failing after repair.")
-
-    # Generate Artifacts
+            record_failure(selected_model, "test_failure")
+            continue
+            
+    if not success:
+        print("All viable implementation models exhausted or failed.")
+        transition_status(issue["url"], "IMPLEMENTATION_FAILED")
+        os.environ.update(original_environ)
+        return False, None, ""
+        
     print("Generating reports and patch...")
     patch_file = reports_dir / "patch.diff"
     create_patch(worktree_path, patch_file)
@@ -367,13 +463,8 @@ def implement(issue_id_or_url):
 
     os.environ.update(original_environ)
 
-    if success:
-        transition_status(issue["url"], "IMPLEMENTED_LOCAL")
-        print(f"Success! Marked {issue_id} as IMPLEMENTED_LOCAL.")
-    else:
-        transition_status(issue["url"], "IMPLEMENTATION_FAILED")
-        print(f"Validation failed. Marked {issue_id} as IMPLEMENTATION_FAILED.")
-
+    transition_status(issue["url"], "IMPLEMENTED_LOCAL")
+    print(f"Success! Marked {issue_id} as IMPLEMENTED_LOCAL.")
     return success, test_results, diff_stat
 
 def review(issue_id):
