@@ -76,7 +76,7 @@ class TestImplementationAgentBehavior:
         assert "MUST directly create and edit files" in prompt
         assert "Use shell commands to write files" in prompt
         assert "run `git diff` and `git status` to verify" in prompt
-        assert "Do NOT output patches or descriptions instead of editing files" in prompt
+        assert "You MUST NOT return a patch, code block, explanation" in prompt
 
     def test_implementation_runs_in_correct_worktree_cwd(self, monkeypatch, tmp_path):
         """Hermes must be invoked with the worktree as its working directory."""

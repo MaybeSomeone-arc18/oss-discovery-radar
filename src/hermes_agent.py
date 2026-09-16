@@ -235,11 +235,23 @@ def _classify_hermes_failure(stderr_text):
             "could not connect",
             "failed to connect",
             "name or service not known",
+            "timeout",
+            "read timeout",
         )
     ):
         return (
             "unreachable",
-            "Inference provider unreachable. Check that the active provider endpoint is running.",
+            "Inference provider unreachable or timed out. Check that the active provider endpoint is running.",
+        )
+    if "429" in err or "cooldown" in err or "rate limit" in err or "too many requests" in err:
+        return (
+            "rate_limit",
+            "Rate limit or cooldown encountered on the provider.",
+        )
+    if "500" in err or "502" in err or "503" in err or "504" in err or "internal server error" in err or "bad gateway" in err:
+        return (
+            "server_error",
+            "Provider returned a 5xx server error.",
         )
     if (
         "404" in err
@@ -254,11 +266,11 @@ def _classify_hermes_failure(stderr_text):
         )
     if any(
         m in err
-        for m in ("401", "403", "unauthorized", "invalid api key", "authentication failed", "forbidden")
+        for m in ("401", "402", "403", "unauthorized", "invalid api key", "authentication failed", "forbidden", "payment required")
     ):
         return (
             "auth",
-            "Inference provider authentication failed. Check the active provider's API key/credential.",
+            "Inference provider authentication/authorization failed. Check the active provider's API key/credential and tier.",
         )
     if "context length" in err or "context too small" in err or "context window" in err:
         return (
@@ -615,6 +627,8 @@ def implement_issue_with_hermes(worktree_path, context, model=None, provider_con
 
     prompt = f"""You are an implementation agent. You are implementing ONE open-source issue in an isolated worktree.
 
+WORKING DIRECTORY: {worktree_path}
+
 CRITICAL SAFETY INSTRUCTIONS:
 - Do not modify the user's main checkout.
 - Make the smallest maintainable change that fully addresses the issue.
@@ -624,19 +638,21 @@ CRITICAL SAFETY INSTRUCTIONS:
 - Use repository conventions.
 
 CRITICAL IMPLEMENTATION INSTRUCTIONS:
-- Work inside the provided isolated worktree (your current working directory). Never modify any other location.
+- You are working in this EXACT directory: {worktree_path}
+- This is the ONLY valid workspace. All file reads and writes MUST target this exact path. Do not rely on your assumed current working directory.
 - Inspect the existing code first: find and read the relevant files, then create/modify exactly the files required by the issue.
-- You MUST directly create and edit files inside the current working directory (the isolated worktree).
-- Use shell commands to write files (for example: cat > path/to/file << 'ENDOFFILE' ... ENDOFFILE), or the file tool if available.
+- You MUST directly create and edit files inside the {worktree_path} directory.
+- Use shell commands to write files (for example: cat > path/to/file << 'ENDOFFILE' ... ENDOFFILE), or the provided terminal/file tools if available.
 - IMPORTANT CONSTRAINTS: To execute shell commands, you MUST use the `terminal` tool with ONLY the `command` parameter. Do NOT invent parameters like `output`. Emit a valid tool call, do not ask the user for permission.
-- After making changes, run `git diff` and `git status` to verify exactly which files were modified.
-- Do NOT output patches or descriptions instead of editing files — you MUST apply the changes to the filesystem.
+- You MUST NOT return a patch, code block, explanation, or proposed diff as a substitute. You MUST apply the changes to the filesystem.
+- After making changes, run `git diff` and `git status` to verify exactly which files were modified before finishing.
+- Keep working until the requested implementation is actually present. Stop only after a real filesystem change exists.
 - Add/update tests where appropriate.
 
 CONTEXT:
 {context}
 
-Implement the change directly in the current directory by writing the modified files using shell commands, then verify with `git diff` before finishing. If you cannot write files, stop and say so explicitly — outputting a description or patch instead of applied edits is NOT an acceptable implementation.
+Implement the change directly in {worktree_path} by writing the modified files using shell commands, then verify with `git diff` before finishing. If you cannot write files, stop and say so explicitly — outputting a description or patch instead of applied edits is NOT an acceptable implementation.
 """
 
     response = run_hermes_oneshot(
@@ -674,7 +690,10 @@ Implement the change directly in the current directory by writing the modified f
             raise RuntimeError(
                 "Implementation agent returned successfully but no files were "
                 "modified in the worktree. The agent likely output a description "
-                "instead of directly editing files."
+                "instead of directly editing files.\n"
+                "--- RAW RESPONSE ---\n"
+                f"{response}\n"
+                "--- END RAW RESPONSE ---"
             )
 
     return response

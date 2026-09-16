@@ -663,3 +663,55 @@ def test_research_passes_discussion_context_to_prompt(monkeypatch, tmp_path):
     assert "Decision reached, proceed with fix." in captured_prompt[0]
     assert "=== DISCUSSION HISTORY ===" in captured_prompt[0]
 
+
+def test_implement_issue_with_hermes_preserves_raw_response_on_empty_diff(monkeypatch, tmp_path):
+    import subprocess
+    import pytest
+    from src.hermes_agent import implement_issue_with_hermes
+
+    monkeypatch.setattr("src.hermes_agent.verify_local_provider", lambda: None)
+    monkeypatch.setattr("src.hermes_agent.run_hermes_oneshot", lambda *a, **k: "MARKDOWN_CODE_BLOCK_WITHOUT_TOOL_CALL")
+
+    class FakeCompletedProcess:
+        stdout = ""
+    
+    def fake_run(cmd, *args, **kwargs):
+        if cmd[:2] == ["git", "status"]:
+            return FakeCompletedProcess()
+        return subprocess.CompletedProcess(args=cmd, returncode=0, stdout="")
+    
+    monkeypatch.setattr("subprocess.run", fake_run)
+
+    with pytest.raises(RuntimeError) as exc_info:
+        implement_issue_with_hermes(tmp_path, "context")
+    
+    err_msg = str(exc_info.value)
+    assert "Implementation agent returned successfully but no files were modified" in err_msg
+    assert "--- RAW RESPONSE ---" in err_msg
+    assert "MARKDOWN_CODE_BLOCK_WITHOUT_TOOL_CALL" in err_msg
+    assert "--- END RAW RESPONSE ---" in err_msg
+
+
+def test_implement_issue_with_hermes_prompt_contains_strict_tool_constraints(monkeypatch, tmp_path):
+    from src.hermes_agent import implement_issue_with_hermes
+
+    captured_prompt = []
+    monkeypatch.setattr("src.hermes_agent.verify_local_provider", lambda: None)
+    def mock_run(*args, **kwargs):
+        captured_prompt.append(args[0])
+        return "ok"
+    monkeypatch.setattr("src.hermes_agent.run_hermes_oneshot", mock_run)
+
+    class FakeCompletedProcess:
+        stdout = "M something.txt\n"
+    monkeypatch.setattr("subprocess.run", lambda *a, **k: FakeCompletedProcess())
+
+    implement_issue_with_hermes(tmp_path, "context")
+    
+    prompt = captured_prompt[0]
+    assert "directly create and edit files" in prompt
+    assert "MUST NOT return a patch, code block, explanation" in prompt
+    assert "Keep working until the requested implementation is actually present" in prompt
+    assert "terminal" in prompt
+    assert f"WORKING DIRECTORY: {tmp_path}" in prompt
+    assert f"All file reads and writes MUST target this exact path." in prompt
