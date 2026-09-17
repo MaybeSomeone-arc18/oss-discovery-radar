@@ -367,10 +367,54 @@ def test_research_command(mock_run, mock_analysis, mock_context, tmp_path):
         with patch("src.hermes_agent.get_reports_dir", return_value=tmp_path):
             result = research(123)
             assert result is True
-            mock_run.assert_called_once()
-            assert mock_run.call_args.kwargs["model"] == "opencode-zen/nemotron-3.5-lightning-free"
+            assert mock_run.call_count == 2 # 1 gate + 1 real
+            
+            gate_call = mock_run.call_args_list[0]
+            assert "Respond with exactly 'OK'." in gate_call.args[0]
+            assert gate_call.kwargs["model"] == "opencode-zen/nemotron-3.5-lightning-free"
+
+            real_call = mock_run.call_args_list[1]
+            assert real_call.kwargs["model"] == "opencode-zen/nemotron-3.5-lightning-free"
             assert (tmp_path / "research.md").exists()
             assert (tmp_path / "research.md").read_text() == "[FACT] The issue is simple."
+
+@patch("src.hermes_agent.get_repo_analysis")
+@patch("src.hermes_agent.get_issue_context")
+@patch("src.hermes_agent.verify_local_provider")
+def test_research_fallback_when_remote_unavailable(mock_verify, mock_context, mock_analysis, tmp_path):
+    from src.hermes_agent import research
+    mock_context.return_value = {
+        "org_slug": "checkstyle",
+        "repo_name": "checkstyle/checkstyle",
+        "issue_number": 123,
+        "title": "Discussion aware test issue",
+        "body_preview": "Truncated body preview",
+        "labels": "[]",
+        "activity_status": "HIGH",
+        "contribution_value_score": 80.0,
+        "gsoc_preparation_score": 90.0,
+        "opportunity_score": 85.0
+    }
+    mock_analysis.return_value = {}
+    
+    with patch("src.hermes_agent.get_reports_dir", return_value=tmp_path):
+        with patch("src.hermes_agent.run_hermes_oneshot") as mock_run:
+            def fake_run(prompt, **kwargs):
+                if prompt == "Respond with exactly 'OK'.":
+                    raise RuntimeError("403 Free tier limit")
+                return "[FACT] The issue is simple."
+            mock_run.side_effect = fake_run
+
+            result = research(123)
+            assert result is True
+            assert mock_run.call_count == 2
+            
+            gate_call = mock_run.call_args_list[0]
+            assert gate_call.kwargs["model"] == "opencode-zen/nemotron-3.5-lightning-free"
+
+            real_call = mock_run.call_args_list[1]
+            assert real_call.kwargs["model"] == "llama3.2:3b"
+            assert real_call.kwargs.get("endpoint") is None # Local fallback does not pass endpoint
 
 
 @patch("src.hermes_agent.verify_local_provider")
@@ -659,9 +703,11 @@ def test_research_passes_discussion_context_to_prompt(monkeypatch, tmp_path):
 
     res = hermes.research(21480)
     assert res is True
-    assert len(captured_prompt) == 1
-    assert "Decision reached, proceed with fix." in captured_prompt[0]
-    assert "=== DISCUSSION HISTORY ===" in captured_prompt[0]
+    assert len(captured_prompt) == 2
+    assert captured_prompt[0] == "Respond with exactly 'OK'."
+    assert "Discussion aware test issue" in captured_prompt[1]
+    assert "Decision reached, proceed with fix." in captured_prompt[1]
+    assert "=== DISCUSSION HISTORY ===" in captured_prompt[1]
 
 
 def test_implement_issue_with_hermes_preserves_raw_response_on_empty_diff(monkeypatch, tmp_path):
@@ -715,3 +761,19 @@ def test_implement_issue_with_hermes_prompt_contains_strict_tool_constraints(mon
     assert "terminal" in prompt
     assert f"WORKING DIRECTORY: {tmp_path}" in prompt
     assert f"All file reads and writes MUST target this exact path." in prompt
+
+def test_classify_hermes_failure_structured_categories():
+    from src.hermes_agent import _classify_hermes_failure
+
+    assert _classify_hermes_failure("timeout of 15000ms exceeded (504)") == "PROVIDER_TIMEOUT"
+    assert _classify_hermes_failure("503 Service Unavailable") == "PROVIDER_SERVER_ERROR"
+    assert _classify_hermes_failure("rate limit exceeded (429)") == "PROVIDER_RATE_LIMIT"
+    assert _classify_hermes_failure("Error from provider (Console): OpenCode's free tier can only be used from within OpenCode (HTTP 403)") == "PROVIDER_ACCESS"
+    assert _classify_hermes_failure("auth — Billing or credits exhausted") == "PROVIDER_AUTH"
+    assert _classify_hermes_failure("read timeout") == "PROVIDER_TIMEOUT"
+    assert _classify_hermes_failure("Implementation agent returned successfully but no files were modified") == "IMPLEMENTATION_FAILURE"
+    assert _classify_hermes_failure("Validation FAILED: No files were changed") == "IMPLEMENTATION_FAILURE"
+    assert _classify_hermes_failure("guardrail failed") == "IMPLEMENTATION_FAILURE"
+    assert _classify_hermes_failure("subprocess.TimeoutExpired: Command 'hermes' timed out after 900 seconds") == "PROVIDER_TIMEOUT"
+    assert _classify_hermes_failure("Hermes CLI timed out after 900 seconds. Model execution might be stuck or too slow.") == "PROVIDER_TIMEOUT"
+    assert _classify_hermes_failure("some weird obscure error") == "UNKNOWN"

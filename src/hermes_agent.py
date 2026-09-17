@@ -216,68 +216,46 @@ def _inject_provider_entry(runtime_home, *, provider_id, model, base_url, api_ke
 
 
 def _classify_hermes_failure(stderr_text):
-    """Return (kind, user_message) for known Hermes/provider failure modes.
+    """Return a structured category for known Hermes/provider failure modes.
 
-    Used by run_hermes_oneshot() so a child that exits (or is killed at the
-    outer 900s timeout) with a clear provider/model error surfaces the actual
-    stderr instead of a generic message. Returns None when the output does not
-    match any known failure signature.
+    Used as the single source of truth for provider/model failures.
+    Returns one of:
+    - PROVIDER_RATE_LIMIT
+    - PROVIDER_AUTH
+    - PROVIDER_ACCESS
+    - PROVIDER_TIMEOUT
+    - PROVIDER_SERVER_ERROR
+    - PROVIDER_UNAVAILABLE
+    - IMPLEMENTATION_FAILURE
+    - UNKNOWN
     """
     err = (stderr_text or "").lower()
     if not err.strip():
-        return None
-    if any(
-        m in err
-        for m in (
-            "connection refused",
-            "connection reset",
-            "unreachable",
-            "could not connect",
-            "failed to connect",
-            "name or service not known",
-            "timeout",
-            "read timeout",
-        )
-    ):
-        return (
-            "unreachable",
-            "Inference provider unreachable or timed out. Check that the active provider endpoint is running.",
-        )
-    if "429" in err or "cooldown" in err or "rate limit" in err or "too many requests" in err:
-        return (
-            "rate_limit",
-            "Rate limit or cooldown encountered on the provider.",
-        )
-    if "500" in err or "502" in err or "503" in err or "504" in err or "internal server error" in err or "bad gateway" in err:
-        return (
-            "server_error",
-            "Provider returned a 5xx server error.",
-        )
-    if (
-        "404" in err
-        or "model not found" in err
-        or "not available" in err
-        or ("model" in err and "not found" in err)
-        or "does not exist" in err
-    ):
-        return (
-            "model",
-            "Model unavailable on the active provider. Make sure the requested model is served.",
-        )
-    if any(
-        m in err
-        for m in ("401", "402", "403", "unauthorized", "invalid api key", "authentication failed", "forbidden", "payment required")
-    ):
-        return (
-            "auth",
-            "Inference provider authentication/authorization failed. Check the active provider's API key/credential and tier.",
-        )
-    if "context length" in err or "context too small" in err or "context window" in err:
-        return (
-            "context",
-            "Context too small. Adjust config or model parameters.",
-        )
-    return None
+        return "UNKNOWN"
+
+    if any(m in err for m in ("429", "cooldown", "rate limit", "rate_limit", "too many requests")):
+        return "PROVIDER_RATE_LIMIT"
+
+    if any(m in err for m in ("401", "402", "unauthorized", "invalid api key", "authentication failed", "billing", "credits exhausted", "payment required")):
+        return "PROVIDER_AUTH"
+
+    if any(m in err for m in ("403", "forbidden", "policy", "access restriction", "free tier can only be used from within opencode")):
+        return "PROVIDER_ACCESS"
+
+    if any(m in err for m in ("408", "504", "timeout", "read timeout", "gateway timeout", "connection timeout", "timeoutexpired", "timed out after")):
+        return "PROVIDER_TIMEOUT"
+
+    if any(m in err for m in ("400", "500", "501", "502", "503", "505", "internal server error", "bad gateway")):
+        return "PROVIDER_SERVER_ERROR"
+
+    if any(m in err for m in ("404", "model not found", "does not exist", "unreachable", "could not connect", "failed to connect", "connection refused", "connection reset", "name or service not known")):
+        return "PROVIDER_UNAVAILABLE"
+
+    # Distinguish syntax/guardrail/no-diff implementation failures vs just unknown errors
+    if any(m in err for m in ("no files were changed", "guardrail", "no diff", "implementation agent returned successfully but no files were modified")):
+        return "IMPLEMENTATION_FAILURE"
+
+    return "UNKNOWN"
 
 
 def run_hermes_oneshot(
@@ -289,6 +267,7 @@ def run_hermes_oneshot(
     provider_id=None,
     base_url=None,
     api_key_env=None,
+    timeout=900,
 ):
     """Run a single Hermes prompt in a sandboxed child process.
 
@@ -348,7 +327,7 @@ def run_hermes_oneshot(
             "cwd": cwd,
             "capture_output": True,
             "text": True,
-            "timeout": 900,
+            "timeout": timeout,
             "env": child_env,
         }
         if os.name == "posix":
@@ -358,10 +337,9 @@ def run_hermes_oneshot(
 
         if result.returncode != 0:
             failure = _classify_hermes_failure(result.stderr)
-            if failure is not None:
-                _kind, message = failure
+            if failure != "UNKNOWN":
                 raise RuntimeError(
-                    f"{message}\nDetails: {result.stderr}"
+                    f"[{failure}] Provider/Hermes execution failed.\nDetails: {result.stderr}"
                 )
             raise RuntimeError(
                 f"Hermes CLI failed with code {result.returncode}:\n{result.stderr}"
@@ -374,24 +352,23 @@ def run_hermes_oneshot(
 
     except subprocess.TimeoutExpired as exc:
         # Surface a real provider/model error when the child left one in the
-        # captured output before the outer 900s safety limit killed it; keep
-        # 900s as the outer limit (do not raise it).
+        # captured output before the outer safety limit killed it; keep
+        # the timeout as the outer limit (do not raise it).
         partial_stderr = getattr(exc, "stderr", None)
         if isinstance(partial_stderr, bytes):
             partial_stderr = partial_stderr.decode(errors="replace")
         failure = _classify_hermes_failure(partial_stderr)
-        if failure is not None:
-            _kind, message = failure
+        if failure != "UNKNOWN":
             snippet = (partial_stderr or "").strip()[-1500:]
             raise RuntimeError(
-                "Hermes CLI hit the 900-second safety timeout, but the provider "
-                f"reported a failure before that: {message}\n"
+                f"Hermes CLI hit the {timeout}-second safety timeout, but the provider "
+                f"reported a failure before that: {failure}\n"
                 f"Captured stderr: {snippet}\n"
-                "The 900s timeout is the outer safety net; the provider error above "
+                f"The {timeout}s timeout is the outer safety net; the provider error above "
                 "is why execution could not complete."
             )
         raise RuntimeError(
-            "Hermes CLI timed out after 900 seconds. Model execution might be stuck or too slow."
+            f"Hermes CLI timed out after {timeout} seconds. Model execution might be stuck or too slow."
         )
     except FileNotFoundError:
         raise RuntimeError(
@@ -485,6 +462,17 @@ Known AI Policy Constraints: No AI-generated code push without human review.
     prompt += "\nOutput ONLY the Markdown report."
 
     try:
+        try:
+            gate_kwargs = {"safe_mode": True, "model": selected_model}
+            if provider_config:
+                gate_kwargs.update(_oneshot_provider_kwargs(provider_config))
+            run_hermes_oneshot("Respond with exactly 'OK'.", timeout=15, **gate_kwargs)
+        except Exception as gate_e:
+            print(f"Research provider health check failed for {selected_model}: {gate_e}")
+            print("Falling back to local safe research model (llama3.2:3b).")
+            selected_model = "llama3.2:3b"
+            provider_config = None
+
         response = run_hermes_oneshot(
             prompt,
             safe_mode=True,
@@ -618,7 +606,7 @@ def _oneshot_provider_kwargs(provider_config):
     }
 
 
-def implement_issue_with_hermes(worktree_path, context, model=None, provider_config=None):
+def implement_issue_with_hermes(worktree_path, context, model=None, provider_config=None, telemetry=None):
     print(f"Running Hermes implementation in {worktree_path}...")
     try:
         verify_local_provider()
@@ -654,6 +642,16 @@ CONTEXT:
 
 Implement the change directly in {worktree_path} by writing the modified files using shell commands, then verify with `git diff` before finishing. If you cannot write files, stop and say so explicitly — outputting a description or patch instead of applied edits is NOT an acceptable implementation.
 """
+
+    prompt_chars = len(prompt)
+    prompt_tokens = prompt_chars // 4
+    
+    print("TELEMETRY: Implementation Prompt Metrics:")
+    print(f"  - character count: {prompt_chars}")
+    print(f"  - approximate token count: {prompt_tokens}")
+    if telemetry:
+        for k, v in telemetry.items():
+            print(f"  - {k}: {v}")
 
     response = run_hermes_oneshot(
         prompt,
