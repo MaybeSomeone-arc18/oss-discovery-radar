@@ -149,6 +149,11 @@ def get_eligible_models():
         
         eligible.append(m)
         
+    def is_concrete(model_entry):
+        return not model_entry["model_id"].startswith("auto/")
+
+    # Prefer concrete models first, then sort by latency
+    eligible.sort(key=lambda x: (not is_concrete(x), x.get("measured_latency", 9999)))
     return eligible
 
 def record_failure(model_id, error_type):
@@ -161,19 +166,24 @@ def record_failure(model_id, error_type):
             m["last_failure_type"] = error_type
             m["last_probe"] = now
             
-            error_lower = str(error_type).lower()
-            if "429" in error_lower or "cooldown" in error_lower or "rate limit" in error_lower:
+            if error_type == "PROVIDER_RATE_LIMIT":
                 m["cooldown_until"] = now + 300  # 5 minutes
                 m["availability_status"] = "COOLDOWN"
-            elif any(e in error_lower for e in ["timeout", "502", "503", "504", "5xx", "500"]):
+            elif error_type == "PROVIDER_TIMEOUT":
                 m["cooldown_until"] = now + 60   # 1 minute
                 m["availability_status"] = "TIMEOUT"
-            elif any(e in error_lower for e in ["402", "403", "404"]):
+            elif error_type in ("PROVIDER_AUTH", "PROVIDER_ACCESS", "PROVIDER_UNAVAILABLE"):
                 m["cooldown_until"] = now + 3600 # 1 hour
                 m["availability_status"] = "ERROR_4XX"
+            elif error_type == "PROVIDER_SERVER_ERROR":
+                m["cooldown_until"] = now + 300  # 5 minutes
+                m["availability_status"] = "SERVER_ERROR"
+            elif error_type in ("IMPLEMENTATION_FAILURE", "UNKNOWN"):
+                m["cooldown_until"] = now + 300
+                m["availability_status"] = "IMPLEMENTATION_ERROR" if error_type == "IMPLEMENTATION_FAILURE" else "ERROR"
             else:
-                m["cooldown_until"] = now + 30   # Default 30s
-                m["availability_status"] = "ERROR"
+                m["cooldown_until"] = now + 300 
+                m["availability_status"] = "IMPLEMENTATION_ERROR"
             break
             
     save_registry(data)

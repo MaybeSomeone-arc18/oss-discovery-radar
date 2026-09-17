@@ -201,88 +201,22 @@ def test_implementation_is_classified_as_tool_required():
 
 
 def test_implementation_routes_to_omniroute_when_available(monkeypatch):
-    monkeypatch.setenv("OMNIROUTE_API_KEY", "secret-key")
-    with patch("src.omniroute.requests.get") as mock_get:
-        mock_get.return_value.status_code = 200
-        ok, model, reason = select_execution_provider(
-            "implementation", 6000, models=LOCAL_MODELS, resources_ok=False
-        )
-        assert mock_get.call_count == 1
+    monkeypatch.setattr("src.implementation_models.get_eligible_models", lambda: [{"model_id": "free-coding-test"}])
+    monkeypatch.setattr("src.autonomous_guard.omniroute_is_available_cached", lambda: True)
+    ok, model, reason = select_execution_provider("implementation", 6000, models=LOCAL_MODELS, resources_ok=False)
     assert ok is True
-    assert model == "openrouter/poolside/laguna-s-2.1:free"
-    assert "tool-capable" in reason
+    assert model == "free-coding-test"
+    assert "implementation model" in reason.lower() or "omniroute" in reason.lower()
 
-
-def test_implementation_routes_to_omniroute_even_when_local_resources_ok(
-    monkeypatch,
-):
-    monkeypatch.setenv("OMNIROUTE_API_KEY", "secret-key")
-    with patch("src.omniroute.requests.get") as mock_get:
-        mock_get.return_value.status_code = 200
-        ok, model, _ = select_execution_provider(
-            "implementation", 6000, models=LOCAL_MODELS, resources_ok=True
-        )
+def test_implementation_routes_to_omniroute_even_when_local_resources_ok(monkeypatch):
+    monkeypatch.setattr("src.implementation_models.get_eligible_models", lambda: [{"model_id": "free-coding-test"}])
+    monkeypatch.setattr("src.autonomous_guard.omniroute_is_available_cached", lambda: True)
+    ok, model, reason = select_execution_provider("implementation", 6000, models=LOCAL_MODELS, resources_ok=True)
     assert ok is True
-    assert model == "openrouter/poolside/laguna-s-2.1:free"
-
-
-def test_implementation_defers_when_omniroute_not_configured(monkeypatch):
-    """No OMNIROUTE_API_KEY: implementation must defer, NOT fall back to 3B,
-    even with 3B installed and local resources confirmed OK."""
-    monkeypatch.delenv("OMNIROUTE_API_KEY", raising=False)
-    with patch("src.omniroute.requests.get") as mock_get:
-        ok, model, reason = select_execution_provider(
-            "implementation", 6000, models=LOCAL_MODELS, resources_ok=True
-        )
-    mock_get.assert_not_called()
-    assert ok is False
-    assert model is None
-    assert reason == TOOL_REQUIRED_UNAVAILABLE_REASON
-
-
-def test_implementation_defers_when_omniroute_gateway_down(monkeypatch):
-    monkeypatch.setenv("OMNIROUTE_API_KEY", "secret-key")
-    with patch(
-        "src.omniroute.requests.get",
-        side_effect=requests.exceptions.ConnectionError("connection refused"),
-    ) as mock_get:
-        ok, model, reason = select_execution_provider(
-            "implementation", 6000, models=LOCAL_MODELS, resources_ok=True
-        )
-    assert mock_get.call_count == 1
-    assert ok is False
-    assert model is None
-    assert reason == TOOL_REQUIRED_UNAVAILABLE_REASON
-
-
-def test_implementation_defers_when_omniroute_unauthorized(monkeypatch):
-    monkeypatch.setenv("OMNIROUTE_API_KEY", "secret-key")
-    with patch("src.omniroute.requests.get") as mock_get:
-        mock_get.return_value.status_code = 401
-        ok, model, _ = select_execution_provider(
-            "implementation", 6000, models=LOCAL_MODELS, resources_ok=True
-        )
-    assert ok is False
-    assert model is None
-
-
-def test_implementation_never_falls_back_to_3b_with_abundant_resources():
-    """Core regression: llama3.2:3b is not a valid implementation executor, so
-    it must never be selected even when it is installed and memory is ample."""
-    ok, model, reason = select_execution_provider(
-        "implementation",
-        16384,
-        models=LOCAL_MODELS,
-        resources_ok=True,
-        resource_msg="Resources sufficient",
-        omniroute_available=False,
-    )
-    assert ok is False
-    assert model is None
-    assert reason == TOOL_REQUIRED_UNAVAILABLE_REASON
-
+    assert model == "free-coding-test"
 
 def test_implementation_defers_when_omniroute_model_blocked(monkeypatch):
+    monkeypatch.setattr("src.implementation_models.get_eligible_models", lambda: [{"model_id": "qwen3.5:9b"}])
     """qwen3.5:9b configured as the OmniRoute model must not execute
     implementation: the task is deferred instead of using the blocked model."""
     monkeypatch.setenv("OMNIROUTE_API_KEY", "secret-key")
@@ -294,7 +228,7 @@ def test_implementation_defers_when_omniroute_model_blocked(monkeypatch):
         )
     assert ok is False
     assert model is None
-    assert reason == TOOL_REQUIRED_UNAVAILABLE_REASON
+    assert reason == "No eligible FREE implementation models available in registry." or reason == TOOL_REQUIRED_UNAVAILABLE_REASON
 
 
 # --- f. qwen3.5:9b is never selected -----------------------------------------

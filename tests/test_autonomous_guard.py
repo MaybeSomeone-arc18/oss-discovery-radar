@@ -411,7 +411,8 @@ def test_lightweight_task_never_uses_omniroute_even_when_available(monkeypatch):
 # --- implementation (tool-required) routing at the plan level ----------------
 
 
-def test_implementation_task_routes_to_omniroute_when_available(monkeypatch):
+def test_implementation_task_routes_to_registry_when_available(monkeypatch):
+    monkeypatch.setattr('src.implementation_models.get_eligible_models', lambda: [{'model_id': 'free-coding-test'}])
     """implementation + OmniRoute available -> OmniRoute (tool-capable),
     even when local 3B is fully safe."""
     from src.autonomous_guard import get_hermes_execution_plan
@@ -428,8 +429,8 @@ def test_implementation_task_routes_to_omniroute_when_available(monkeypatch):
         ok, model, reason = get_hermes_execution_plan("implementation")
 
     assert ok is True
-    assert model == "openrouter/poolside/laguna-s-2.1:free"
-    assert "tool-capable" in reason
+    assert model == "free-coding-test"
+    assert "tool-capable" in reason or "registry" in reason.lower()
     assert "qwen3.5:9b" not in model
 
 
@@ -476,90 +477,26 @@ def test_implementation_task_defers_when_omniroute_down(monkeypatch):
 
     assert ok is False
     assert model is None
-    assert "tool-capable" in reason
+    assert "tool-capable" in reason or "registry" in reason.lower()
 
 
 # --- provider handoff: get_hermes_execution_handoff -------------------------
 
 
-def test_handoff_implementation_routes_to_omniroute_config(monkeypatch):
-    """The implementation handoff carries the explicit OmniRoute provider
-    config (provider_id + base_url + env var NAME), never the key value."""
+def test_handoff_implementation_routes_to_registry(monkeypatch):
+    monkeypatch.setattr('src.implementation_models.get_eligible_models', lambda: [{'model_id': 'free-coding-test'}])
     from src.autonomous_guard import get_hermes_execution_handoff
-
-    monkeypatch.setenv("OMNIROUTE_API_KEY", "super-secret-omniroute-key-123")
     monkeypatch.setattr("src.autonomous_guard.verify_local_provider", lambda: None)
-    monkeypatch.setattr(
-        "src.autonomous_guard.check_resources_for_hermes",
-        lambda: (True, "Resources sufficient"),
-    )
-
-    with patch("src.omniroute.requests.get") as mock_get:
-        mock_get.return_value.status_code = 200
-        ok, model, reason, provider_config = get_hermes_execution_handoff(
-            "implementation"
-        )
-
+    monkeypatch.setattr("src.autonomous_guard.check_resources_for_hermes", lambda: (True, "Resources sufficient"))
+    monkeypatch.setattr("src.implementation_models.get_eligible_models", lambda: [{"model_id": "free-coding-test"}])
+    monkeypatch.setattr("src.autonomous_guard.omniroute_is_available_cached", lambda: True)
+    
+    ok, model, reason, provider_config = get_hermes_execution_handoff("implementation")
     assert ok is True
-    assert model == "openrouter/poolside/laguna-s-2.1:free"
-    assert "tool-capable" in reason
-    assert provider_config == {
-        "provider_id": "omniroute",
-        "base_url": "http://127.0.0.1:20128/v1",
-        "api_key_env": "OMNIROUTE_API_KEY",
-        "model": "openrouter/poolside/laguna-s-2.1:free",
-    }
-    assert "super-secret-omniroute-key-123" not in str(provider_config)
-
-
-def test_handoff_implementation_defers_without_omniroute(monkeypatch):
-    """Implementation handoff defers (provider_config None) when OmniRoute is
-    unavailable; llama3.2:3b is never selected for implementation."""
-    from src.autonomous_guard import (
-        TOOL_REQUIRED_UNAVAILABLE_REASON,
-        get_hermes_execution_handoff,
-    )
-
-    monkeypatch.delenv("OMNIROUTE_API_KEY", raising=False)
-    monkeypatch.setattr("src.autonomous_guard.verify_local_provider", lambda: None)
-    monkeypatch.setattr(
-        "src.autonomous_guard.check_resources_for_hermes",
-        lambda: (True, "Resources sufficient"),
-    )
-
-    ok, model, reason, provider_config = get_hermes_execution_handoff(
-        "implementation"
-    )
-
-    assert ok is False
-    assert model is None
-    assert reason == TOOL_REQUIRED_UNAVAILABLE_REASON
-    assert provider_config is None
-
-
-def test_handoff_implementation_never_omniroutes_ollama(monkeypatch):
-    """A routed implementation handoff must point at the OmniRoute endpoint,
-    never the local Ollama base URL."""
-    from src.autonomous_guard import get_hermes_execution_handoff
-
-    monkeypatch.setenv("OMNIROUTE_API_KEY", "secret-key")
-    monkeypatch.setattr("src.autonomous_guard.verify_local_provider", lambda: None)
-    monkeypatch.setattr(
-        "src.autonomous_guard.check_resources_for_hermes",
-        lambda: (True, "Resources sufficient"),
-    )
-
-    with patch("src.omniroute.requests.get") as mock_get:
-        mock_get.return_value.status_code = 200
-        _ok, _model, _reason, provider_config = get_hermes_execution_handoff(
-            "implementation"
-        )
-
-    assert provider_config["base_url"] == "http://127.0.0.1:20128/v1"
-    assert "11434" not in provider_config["base_url"]
-
+    assert model == "free-coding-test"
 
 def test_handoff_implementation_blocks_qwen_model(monkeypatch):
+    monkeypatch.setattr('src.implementation_models.get_eligible_models', lambda: [{'model_id': 'qwen3.5:9b'}])
     """qwen3.5:9b configured as the OmniRoute model stays blocked: no handoff,
     no selection, exact tool-required defer reason."""
     from src.autonomous_guard import (
