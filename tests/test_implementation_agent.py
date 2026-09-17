@@ -22,7 +22,7 @@ HANDOFF = {
     "provider_id": "omniroute",
     "base_url": "http://127.0.0.1:20128/v1",
     "api_key_env": "OMNIROUTE_API_KEY",
-    "model": "opencode-zen/nemotron-3.5-lightning-free",
+    "model": "free-coding-test",
 }
 
 
@@ -98,10 +98,10 @@ class TestImplementationAgentBehavior:
 
         assert captured_kwargs["cwd"] == str(tmp_path)
 
-    def test_no_diff_implementation_fails_fast(self, monkeypatch, tmp_path):
-        """If Hermes returns but no files are modified, a clear RuntimeError
-        must be raised before the guardrail stage."""
-        monkeypatch.setattr("src.hermes_agent.run_hermes_oneshot", lambda *a, **k: "dummy response")
+    def test_implement_fails_fast_on_no_diff(self, monkeypatch, tmp_path):
+        """If Hermes generates no diff, implement() must fail immediately rather than looping."""
+        monkeypatch.setattr("src.implementer.implement_issue_with_hermes", lambda *a, **k: "dummy")
+        monkeypatch.setattr("src.implementer.run_hermes_oneshot", lambda *a, **k: "OK")
         monkeypatch.setattr("src.hermes_agent.verify_local_provider", lambda: None)
 
         # Set up git repo so post-execution check runs
@@ -114,13 +114,14 @@ class TestImplementationAgentBehavior:
         subprocess.run(["git", "commit", "-m", "initial"], cwd=tmp_path, check=True)
 
         # Make subprocess.run return empty stdout for git status (no changes)
+        original_run = subprocess.run
         def fake_subprocess_run(cmd, **kwargs):
             if cmd[:2] == ["git", "status"]:
                 result = MagicMock()
                 result.stdout = ""
                 result.returncode = 0
                 return result
-            return subprocess.run(cmd, **kwargs)
+            return original_run(cmd, **kwargs)
 
         monkeypatch.setattr("src.hermes_agent.subprocess.run", fake_subprocess_run)
 
@@ -153,11 +154,13 @@ class TestImplementationIntegration:
         """The implement() function must pass the correct worktree to the agent."""
         captured_cwd = {}
 
-        def fake_hermes(worktree_path, context, model=None, provider_config=None):
+        def fake_hermes(worktree_path, context, model=None, provider_config=None, **kwargs):
             captured_cwd["worktree"] = str(worktree_path)
             return "dummy"
 
         monkeypatch.setattr("src.implementer.implement_issue_with_hermes", fake_hermes)
+        monkeypatch.setattr("src.implementer.repair_issue_with_hermes", lambda *a, **k: "OK")
+        monkeypatch.setattr("src.implementer.run_hermes_oneshot", lambda *a, **k: "OK")
         monkeypatch.setattr("src.implementer.check_diff_guardrails", lambda *a: (True, "OK"))
         monkeypatch.setattr("src.implementer.discover_and_run_tests", lambda *a: [])
         monkeypatch.setattr("src.implementer.generate_reports", lambda *a, **k: None)
@@ -169,7 +172,8 @@ class TestImplementationIntegration:
         monkeypatch.setattr("src.implementer.create_worktree", lambda *a: worktree_dir)
         monkeypatch.setattr("src.implementer.requests.get", lambda *a, **k: MagicMock(status_code=200, json=lambda: {"title": "Test"}))
         monkeypatch.setattr("src.implementer.get_reports_dir", lambda *a: reports_dir)
-        monkeypatch.setattr("src.implementer.get_hermes_execution_handoff", lambda **kwargs: (True, "opencode-zen/nemotron-3.5-lightning-free", "OK", HANDOFF))
+        monkeypatch.setattr("src.implementer.get_hermes_execution_handoff", lambda **kwargs: (True, "free-coding-test", "OK", HANDOFF))
+        monkeypatch.setattr("src.implementation_models.load_registry", lambda: [{"model_id": "free-coding-test", "availability_status": "AVAILABLE", "cooldown_until": 0, "free_only": True, "verified_filesystem_edit": True}])
         monkeypatch.setattr("src.implementer.get_issue_context_by_url", lambda *a: {"url": "http://test/1", "issue_number": 1, "org_slug": "test", "repo_name": "test/repo", "title": "Test", "body_preview": "body"})
         monkeypatch.setattr("src.opportunity_manager.communication_allows_implementation", lambda *a: True)
         monkeypatch.setattr("src.opportunity_manager.transition_status", lambda *a, **k: None)
@@ -183,10 +187,12 @@ class TestImplementationIntegration:
     def test_implement_fails_fast_on_no_diff(self, monkeypatch, tmp_path):
         """A no-diff agent response must be rejected by the strict guardrail:
         implement() returns failure instead of claiming implementation success."""
-        def fake_hermes_no_changes(worktree_path, context, model=None, provider_config=None):
+        def fake_hermes_no_changes(worktree_path, context, model=None, provider_config=None, **kwargs):
             return "dummy response"
 
         monkeypatch.setattr("src.implementer.implement_issue_with_hermes", fake_hermes_no_changes)
+        monkeypatch.setattr("src.implementer.repair_issue_with_hermes", lambda *a, **k: "OK")
+        monkeypatch.setattr("src.implementer.run_hermes_oneshot", lambda *a, **k: "OK")
         monkeypatch.setattr("src.implementer.discover_and_run_tests", lambda *a: [])
         monkeypatch.setattr("src.implementer.generate_reports", lambda *a, **k: None)
         # Worktree and reports are siblings, exactly like the real layout.
@@ -197,7 +203,8 @@ class TestImplementationIntegration:
         monkeypatch.setattr("src.implementer.create_worktree", lambda *a: worktree_dir)
         monkeypatch.setattr("src.implementer.requests.get", lambda *a, **k: MagicMock(status_code=200, json=lambda: {"title": "Test"}))
         monkeypatch.setattr("src.implementer.get_reports_dir", lambda *a: reports_dir)
-        monkeypatch.setattr("src.implementer.get_hermes_execution_handoff", lambda **kwargs: (True, "opencode-zen/nemotron-3.5-lightning-free", "OK", HANDOFF))
+        monkeypatch.setattr("src.implementer.get_hermes_execution_handoff", lambda **kwargs: (True, "free-coding-test", "OK", HANDOFF))
+        monkeypatch.setattr("src.implementation_models.load_registry", lambda: [{"model_id": "free-coding-test", "availability_status": "AVAILABLE", "cooldown_until": 0, "free_only": True, "verified_filesystem_edit": True}])
         monkeypatch.setattr("src.implementer.get_issue_context_by_url", lambda *a: {"url": "http://test/1", "issue_number": 1, "org_slug": "test", "repo_name": "test/repo", "title": "Test", "body_preview": "body"})
         monkeypatch.setattr("src.opportunity_manager.communication_allows_implementation", lambda *a: True)
         monkeypatch.setattr("src.opportunity_manager.transition_status", lambda *a, **k: None)

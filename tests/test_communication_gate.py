@@ -349,6 +349,7 @@ def test_communication_gate_considers_discussion_context(monkeypatch, tmp_path):
     }
 
     monkeypatch.setattr(gate, "get_issue_context", lambda url: mock_issue)
+    monkeypatch.setattr("src.communication_gate.get_reports_dir", lambda org, repo, issue_num: tmp_path / org / repo / "reports" / str(issue_num))
     
     # Create fake research.md
     reports_dir = tmp_path / "checkstyle" / "checkstyle" / "reports" / "21480"
@@ -362,7 +363,7 @@ def test_communication_gate_considers_discussion_context(monkeypatch, tmp_path):
         return """## Recommendation\nNO_CLARIFICATION_NEEDED\n\n## Suggested Reply\nN/A\n\n## Reason\nMaintainer already decided Option B in discussion.\n\n## Questions\n- None\n\n## Implementation Gate\nMAY_PROCEED"""
 
     monkeypatch.setattr(gate, "run_hermes_oneshot", mock_run_oneshot)
-    monkeypatch.setattr("src.autonomous_guard.get_hermes_execution_handoff", lambda task_type: (True, "mock-model", "ok", {}))
+    monkeypatch.setattr("src.communication_gate.get_hermes_execution_handoff", lambda task_type: (True, "mock-model", "ok", {}))
     monkeypatch.setattr(gate, "set_communication_recommendation", lambda issue_url, reply, reason, status=None: None)
 
     res = gate.generate_communication_recommendation("https://github.com/checkstyle/checkstyle/issues/21480")

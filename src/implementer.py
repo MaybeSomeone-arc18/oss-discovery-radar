@@ -304,6 +304,36 @@ def implement(issue_id_or_url):
         if execution_provider:
             execution_provider["model"] = selected_model
 
+        # Pre-Inference Provider Health Gate
+        print(f"Running pre-inference health gate for {selected_model}...")
+        try:
+            gate_kwargs = {"cwd": str(worktree_path), "safe_mode": True, "model": selected_model}
+            if execution_provider:
+                gate_kwargs.update(_oneshot_provider_kwargs(execution_provider))
+            
+            # Tiny prompt to test API connectivity without burning massive context
+            run_hermes_oneshot("Respond with exactly 'OK'.", timeout=15, **gate_kwargs)
+            print(f"Pre-inference health gate passed for {selected_model}.")
+        except Exception as gate_e:
+            from src.hermes_agent import _classify_hermes_failure
+            gate_error_str = str(gate_e)
+            failure_category = _classify_hermes_failure(gate_error_str)
+            if failure_category.startswith("PROVIDER_"):
+                print(f"Provider health issue detected at gate for {selected_model}: {failure_category}. Selecting next model...")
+                record_failure(selected_model, failure_category)
+                continue
+            else:
+                print(f"Unknown error at pre-inference gate for {selected_model}: {gate_e}")
+                record_failure(selected_model, "UNKNOWN_GATE_ERROR")
+                continue
+
+        telemetry_data = {
+            "plan_size": len(plan_content),
+            "issue_body_size": len(issue.get('body_preview') or ''),
+            "discussion_context_size": len(issue.get('discussion_context') or ''),
+            "repo_context_size": 0, # Difficult to separate out here
+        }
+
         repaired = False
         try:
             implement_issue_with_hermes(
@@ -311,37 +341,40 @@ def implement(issue_id_or_url):
                 context,
                 model=selected_model,
                 provider_config=execution_provider,
+                telemetry=telemetry_data,
             )
             print(f"Hermes applied initial implementation using {selected_model}.")
         except Exception as e:
+            from src.hermes_agent import _classify_hermes_failure
             error_str = str(e)
             print(f"Implementation error with {selected_model}: {e}")
             
-            is_provider_health = False
-            for health_term in ["rate_limit", "rate limit", "cooldown", "timeout", "unreachable", "auth", "server_error", "server error", "5xx", "429"]:
-                if health_term in error_str.lower():
-                    is_provider_health = True
-                    record_failure(selected_model, health_term)
-                    break
+            failure_category = _classify_hermes_failure(error_str)
             
-            if is_provider_health:
-                print(f"Provider health issue detected for {selected_model}. Selecting next model...")
+            if failure_category.startswith("PROVIDER_"):
+                print(f"Provider health issue detected for {selected_model} during execution: {failure_category}. Selecting next model...")
+                record_failure(selected_model, failure_category)
                 continue
             
-            print(f"Implementation quality failure (e.g. no diff). Triggering bounded repair for {selected_model}...")
-            repaired = True
-            try:
-                repair_issue_with_hermes(
-                    worktree_path,
-                    context,
-                    error_str,
-                    model=selected_model,
-                    provider_config=execution_provider,
-                )
-                print("Repair attempt finished.")
-            except Exception as repair_e:
-                print(f"Repair attempt failed for {selected_model}: {repair_e}")
-                record_failure(selected_model, "implementation_repair_failed")
+            if failure_category == "IMPLEMENTATION_FAILURE":
+                print(f"Implementation quality failure (e.g. no diff). Triggering bounded repair for {selected_model}...")
+                repaired = True
+                try:
+                    repair_issue_with_hermes(
+                        worktree_path,
+                        context,
+                        error_str,
+                        model=selected_model,
+                        provider_config=execution_provider,
+                    )
+                    print("Repair attempt finished.")
+                except Exception as repair_e:
+                    print(f"Repair attempt failed for {selected_model}: {repair_e}")
+                    record_failure(selected_model, "implementation_repair_failed")
+                    continue
+            else:
+                print(f"Unknown error encountered with {selected_model}: {failure_category}. Preserving evidence and safely stopping current model.")
+                record_failure(selected_model, failure_category)
                 continue
                 
         passed_guardrails, guardrail_msg = check_diff_guardrails(worktree_path)
