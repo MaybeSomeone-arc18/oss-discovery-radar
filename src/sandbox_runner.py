@@ -19,7 +19,7 @@ def get_safe_env():
 def run_in_sandbox(command_list, cwd):
     config = get_agent_config()
     timeout = config.get("test_timeout_seconds", 60)
-    
+
     print(f"Running safe command: {' '.join(command_list)} in {cwd}")
     try:
         result = subprocess.run(
@@ -51,27 +51,35 @@ def run_in_sandbox(command_list, cwd):
             "returncode": -2
         }
 
-def discover_and_run_tests(cwd):
+def discover_and_run_tests(cwd, targeted_test=None):
     cwd_path = Path(cwd)
     results = []
-    
+
+    if targeted_test:
+        import shlex
+        print(f"Running targeted test: {targeted_test}")
+        # Execute the targeted test
+        res = run_in_sandbox(["sh", "-c", targeted_test], cwd)
+        results.append({"framework": "targeted", "result": res})
+        return results
+
     # Python
     if (cwd_path / "pytest.ini").exists() or (cwd_path / "setup.cfg").exists() or (cwd_path / "pyproject.toml").exists():
         # Check if pytest is available
         if (cwd_path / "tests").exists():
             res = run_in_sandbox(["pytest", "tests/"], cwd)
             results.append({"framework": "pytest", "result": res})
-            
+
     # JavaScript/TypeScript
     if (cwd_path / "package.json").exists():
         res = run_in_sandbox(["npm", "test"], cwd)
         results.append({"framework": "npm", "result": res})
-        
+
     # Rust
     if (cwd_path / "Cargo.toml").exists():
         res = run_in_sandbox(["cargo", "test"], cwd)
         results.append({"framework": "cargo", "result": res})
-        
+
     # Java (Maven)
     if (cwd_path / "pom.xml").exists():
         if (cwd_path / "mvnw").exists():
@@ -79,17 +87,17 @@ def discover_and_run_tests(cwd):
         else:
             res = run_in_sandbox(["mvn", "test"], cwd)
         results.append({"framework": "maven", "result": res})
-        
+
     # Java (Gradle)
     if (cwd_path / "build.gradle").exists() or (cwd_path / "build.gradle.kts").exists():
         res = run_in_sandbox(["./gradlew", "test"], cwd)
         results.append({"framework": "gradle", "result": res})
-        
+
     # Go
     if (cwd_path / "go.mod").exists():
         res_test = run_in_sandbox(["go", "test", "./..."], cwd)
         results.append({"framework": "go test", "result": res_test})
         res_vet = run_in_sandbox(["go", "vet", "./..."], cwd)
         results.append({"framework": "go vet", "result": res_vet})
-        
+
     return results

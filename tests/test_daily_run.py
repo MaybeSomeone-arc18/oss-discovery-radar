@@ -13,13 +13,13 @@ from src.database import (
 def test_first_run_starts(isolated_test_db):
     """A first run for today should start and record RUNNING."""
     today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
-    
+
     state = get_daily_run_state(today)
     assert state is None, "Should be no state before first run"
 
     record_daily_run_start(today)
     state = get_daily_run_state(today)
-    
+
     assert state is not None
     assert state["status"] == "RUNNING"
     assert state["started_at"] is not None

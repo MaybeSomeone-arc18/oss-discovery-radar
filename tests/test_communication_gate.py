@@ -350,7 +350,7 @@ def test_communication_gate_considers_discussion_context(monkeypatch, tmp_path):
 
     monkeypatch.setattr(gate, "get_issue_context", lambda url: mock_issue)
     monkeypatch.setattr("src.communication_gate.get_reports_dir", lambda org, repo, issue_num: tmp_path / org / repo / "reports" / str(issue_num))
-    
+
     # Create fake research.md
     reports_dir = tmp_path / "checkstyle" / "checkstyle" / "reports" / "21480"
     reports_dir.mkdir(parents=True)

@@ -12,9 +12,9 @@ def isolated_test_db(tmp_path):
     db_file = tmp_path / "test_radar.db"
     original_db = config.DB_PATH
     config.DB_PATH = str(db_file)
-    
+
     init_db()
-    
+
     yield
-    
+
     config.DB_PATH = original_db

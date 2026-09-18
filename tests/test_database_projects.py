@@ -6,7 +6,7 @@ import os
 
 def test_save_gsoc_project():
     database.save_organization("test-org", "Test Organization", "https://test.org", 2023)
-    
+
     database.save_gsoc_project(
         org_slug="test-org",
         year=2023,
@@ -18,10 +18,10 @@ def test_save_gsoc_project():
         code_url="https://github.com/example/code",
         technologies="python,c++"
     )
-    
+
     stats = database.get_stats()
     assert stats['projects'] == 1
-    
+
     # Idempotency test
     database.save_gsoc_project(
         org_slug="test-org",
@@ -34,6 +34,6 @@ def test_save_gsoc_project():
         code_url="https://github.com/example/code",
         technologies="python,c++,rust"
     )
-    
+
     stats = database.get_stats()
     assert stats['projects'] == 1

@@ -46,29 +46,29 @@ PLIST_TEMPLATE = """<?xml version="1.0" encoding="UTF-8"?>
 <dict>
     <key>Label</key>
     <string>com.oss.discovery.radar</string>
-    
+
     <key>ProgramArguments</key>
     <array>
         <string>{python_path}</string>
         <string>{script_path}</string>
         <string>run-now</string>
     </array>
-    
+
     <key>WorkingDirectory</key>
     <string>{working_dir}</string>
-    
+
     <key>EnvironmentVariables</key>
     <dict>
         <key>PATH</key>
         <string>{launchd_path}</string>
     </dict>
-    
+
     <key>StandardOutPath</key>
     <string>{log_dir}/radar.log</string>
-    
+
     <key>StandardErrorPath</key>
     <string>{log_dir}/radar_error.log</string>
-    
+
     <key>StartCalendarInterval</key>
     <dict>
         <key>Hour</key>
@@ -76,7 +76,7 @@ PLIST_TEMPLATE = """<?xml version="1.0" encoding="UTF-8"?>
         <key>Minute</key>
         <integer>{minute}</integer>
     </dict>
-    
+
     <key>RunAtLoad</key>
     <false/>
 </dict>
@@ -169,15 +169,15 @@ def get_plist_path():
 def install_schedule(hour=2, minute=0):
     """Installs the daily schedule for macOS launchd."""
     plist_path = get_plist_path()
-    
+
     import sys
     python_path = sys.executable
     working_dir = str(Path.cwd().absolute())
     script_path = str((Path.cwd() / "main.py").absolute())
     log_dir = str((Path.cwd() / "logs").absolute())
-    
+
     Path(log_dir).mkdir(exist_ok=True)
-    
+
     plist_content = PLIST_TEMPLATE.format(
         python_path=python_path,
         script_path=script_path,
@@ -187,20 +187,20 @@ def install_schedule(hour=2, minute=0):
         minute=minute,
         launchd_path=LAUNCHD_PATH,
     )
-    
+
     # Ensure LaunchAgents dir exists
     plist_path.parent.mkdir(parents=True, exist_ok=True)
-    
+
     with open(plist_path, "w") as f:
         f.write(plist_content)
-        
+
     # Unload if exists, then load
     subprocess.run(["launchctl", "unload", str(plist_path)], capture_output=True)
     result = subprocess.run(["launchctl", "load", str(plist_path)], capture_output=True, text=True)
-    
+
     if result.returncode != 0:
         return False, f"Failed to load schedule: {result.stderr}"
-    
+
     return True, f"Schedule installed at {hour:02d}:{minute:02d} daily. Plist: {plist_path}"
 
 def remove_schedule():
@@ -208,7 +208,7 @@ def remove_schedule():
     plist_path = get_plist_path()
     if not plist_path.exists():
         return False, "Schedule not installed."
-        
+
     subprocess.run(["launchctl", "unload", str(plist_path)], capture_output=True)
     os.remove(plist_path)
     return True, "Schedule removed."
@@ -218,11 +218,11 @@ def schedule_status():
     plist_path = get_plist_path()
     if not plist_path.exists():
         return "Not installed."
-        
+
     result = subprocess.run(["launchctl", "list"], capture_output=True, text=True)
     if "com.oss.discovery.radar" in result.stdout:
         return "Installed and loaded in launchd."
-        
+
     return "Installed (plist exists) but not loaded in launchd."
 
 

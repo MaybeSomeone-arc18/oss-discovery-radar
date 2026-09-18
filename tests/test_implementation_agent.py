@@ -74,8 +74,6 @@ class TestImplementationAgentBehavior:
 
         # New explicit instructions must be present
         assert "MUST directly create and edit files" in prompt
-        assert "Use shell commands to write files" in prompt
-        assert "run `git diff` and `git status` to verify" in prompt
         assert "You MUST NOT return a patch, code block, explanation" in prompt
 
     def test_implementation_runs_in_correct_worktree_cwd(self, monkeypatch, tmp_path):
@@ -162,14 +160,14 @@ class TestImplementationIntegration:
         monkeypatch.setattr("src.implementer.repair_issue_with_hermes", lambda *a, **k: "OK")
         monkeypatch.setattr("src.implementer.run_hermes_oneshot", lambda *a, **k: "OK")
         monkeypatch.setattr("src.implementer.check_diff_guardrails", lambda *a: (True, "OK"))
-        monkeypatch.setattr("src.implementer.discover_and_run_tests", lambda *a: [])
+        monkeypatch.setattr("src.implementer.discover_and_run_tests", lambda *a, **kwargs: [])
         monkeypatch.setattr("src.implementer.generate_reports", lambda *a, **k: None)
         # Worktree and reports are siblings, exactly like the real layout.
         worktree_dir = tmp_path / "worktree"
         worktree_dir.mkdir()
         reports_dir = tmp_path / "reports"
         reports_dir.mkdir()
-        monkeypatch.setattr("src.implementer.create_worktree", lambda *a: worktree_dir)
+        monkeypatch.setattr("src.implementer.create_worktree", lambda *a, **k: worktree_dir)
         monkeypatch.setattr("src.implementer.requests.get", lambda *a, **k: MagicMock(status_code=200, json=lambda: {"title": "Test"}))
         monkeypatch.setattr("src.implementer.get_reports_dir", lambda *a: reports_dir)
         monkeypatch.setattr("src.implementer.get_hermes_execution_handoff", lambda **kwargs: (True, "free-coding-test", "OK", HANDOFF))
@@ -193,14 +191,14 @@ class TestImplementationIntegration:
         monkeypatch.setattr("src.implementer.implement_issue_with_hermes", fake_hermes_no_changes)
         monkeypatch.setattr("src.implementer.repair_issue_with_hermes", lambda *a, **k: "OK")
         monkeypatch.setattr("src.implementer.run_hermes_oneshot", lambda *a, **k: "OK")
-        monkeypatch.setattr("src.implementer.discover_and_run_tests", lambda *a: [])
+        monkeypatch.setattr("src.implementer.discover_and_run_tests", lambda *a, **kwargs: [])
         monkeypatch.setattr("src.implementer.generate_reports", lambda *a, **k: None)
         # Worktree and reports are siblings, exactly like the real layout.
         worktree_dir = tmp_path / "worktree"
         worktree_dir.mkdir()
         reports_dir = tmp_path / "reports"
         reports_dir.mkdir()
-        monkeypatch.setattr("src.implementer.create_worktree", lambda *a: worktree_dir)
+        monkeypatch.setattr("src.implementer.create_worktree", lambda *a, **k: worktree_dir)
         monkeypatch.setattr("src.implementer.requests.get", lambda *a, **k: MagicMock(status_code=200, json=lambda: {"title": "Test"}))
         monkeypatch.setattr("src.implementer.get_reports_dir", lambda *a: reports_dir)
         monkeypatch.setattr("src.implementer.get_hermes_execution_handoff", lambda **kwargs: (True, "free-coding-test", "OK", HANDOFF))

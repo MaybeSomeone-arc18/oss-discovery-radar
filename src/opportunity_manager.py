@@ -6,13 +6,13 @@ def transition_status(issue_url, new_status, reason=None, notes=None, difficulty
     valid_statuses = ['NEW', 'WATCHING', 'RESEARCHED', 'PLANNED', 'IN_PROGRESS', 'IMPLEMENTED_LOCAL', 'IMPLEMENTATION_FAILED', 'SUBMITTED', 'MERGED', 'DISMISSED', 'STALE']
     if new_status not in valid_statuses:
         raise ValueError(f"Invalid status: {new_status}")
-        
+
     with get_connection() as conn:
         cursor = conn.cursor()
-        
+
         updates = ["lifecycle_status = ?"]
         params = [new_status]
-        
+
         if new_status == 'DISMISSED':
             updates.append("dismissed = 1")
             if reason:
@@ -28,7 +28,7 @@ def transition_status(issue_url, new_status, reason=None, notes=None, difficulty
             updates.append("submitted = 1")
         elif new_status == 'MERGED':
             updates.append("merged = 1")
-            
+
         if notes is not None:
             updates.append("user_notes = ?")
             params.append(notes)
@@ -38,10 +38,10 @@ def transition_status(issue_url, new_status, reason=None, notes=None, difficulty
         if skills is not None:
             updates.append("skills_learned = ?")
             params.append(skills)
-            
+
         params.append(issue_url)
         query = f"UPDATE issues SET {', '.join(updates)} WHERE url = ?"
-        
+
         cursor.execute(query, params)
         conn.commit()
 
@@ -143,7 +143,7 @@ def generate_daily_shortlist(limit=10):
         SELECT i.url, i.repo_name, i.issue_number, i.title, i.org_slug, i.contribution_value_score, i.gsoc_preparation_score, i.opportunity_score, o.opportunity_confidence, i.activity_status, i.first_seen_at, i.score_delta
         FROM issues i
         LEFT JOIN organizations o ON i.org_slug = o.slug
-        WHERE i.lifecycle_status IN ('NEW', 'WATCHING') 
+        WHERE i.lifecycle_status IN ('NEW', 'WATCHING')
         AND i.state = 'OPEN'
         AND (i.cooldown_until IS NULL OR i.cooldown_until <= CURRENT_TIMESTAMP)
         ORDER BY i.contribution_value_score DESC NULLS LAST, i.opportunity_score DESC
@@ -151,7 +151,7 @@ def generate_daily_shortlist(limit=10):
         '''
         cursor.execute(query, (limit,))
         rows = cursor.fetchall()
-        
+
         results = []
         for r in rows:
             rec = _get_deterministic_recommendation(r)
@@ -161,13 +161,13 @@ def generate_daily_shortlist(limit=10):
                 'score_delta': r[11],
                 'recommendation': rec
             })
-            
+
             # Update last_recommended_at
             cursor.execute("UPDATE issues SET last_recommended_at = CURRENT_TIMESTAMP WHERE url = ?", (r[0],))
-            
+
             # Apply cooldown for 24h
             cursor.execute("UPDATE issues SET cooldown_until = datetime(CURRENT_TIMESTAMP, '+1 day') WHERE url = ?", (r[0],))
-            
+
         conn.commit()
         return results
 
@@ -215,19 +215,19 @@ def get_history(issue_id):
 def get_changes_summary():
     with get_connection() as conn:
         cursor = conn.cursor()
-        
+
         # New opportunities
         cursor.execute("SELECT COUNT(*) FROM issues WHERE lifecycle_status = 'NEW' AND (first_seen_at > datetime(CURRENT_TIMESTAMP, '-1 day') OR first_seen_at IS NULL)")
         new_count = cursor.fetchone()[0]
-        
+
         # Score increased
         cursor.execute("SELECT COUNT(*) FROM issues WHERE score_delta > 1.0")
         inc_count = cursor.fetchone()[0]
-        
+
         # Score decreased
         cursor.execute("SELECT COUNT(*) FROM issues WHERE score_delta < -1.0")
         dec_count = cursor.fetchone()[0]
-        
+
         return {
             'new_opportunities': new_count,
             'score_increased': inc_count,
@@ -237,7 +237,7 @@ def get_changes_summary():
 def deduplicate_opportunities():
     # Minimal deduplication logic to ensure one canonical record per issue
     pass # Already mostly handled by ON CONFLICT(url) in database.py
-    
+
 def select_top_for_research():
     with get_connection() as conn:
         cursor = conn.cursor()
@@ -245,7 +245,7 @@ def select_top_for_research():
         SELECT i.url, i.issue_number
         FROM issues i
         LEFT JOIN organizations o ON i.org_slug = o.slug
-        WHERE i.lifecycle_status IN ('NEW', 'WATCHING') 
+        WHERE i.lifecycle_status IN ('NEW', 'WATCHING')
         AND i.state = 'OPEN'
         AND i.researched = 0
         AND o.opportunity_confidence IN ('high', 'medium')
@@ -265,35 +265,35 @@ def run_daily_pipeline():
     from src.contribution_collector import fetch_contributions
     from src.contribution_engine import score_and_classify_issues
     from src.scoring_engine import calculate_organization_scores
-    
+
     print("Running Daily Pipeline...")
-    
+
     # Fault-tolerant pipeline
     try:
         fetch_gsoc_organizations()
     except Exception as e:
         print(f"Error fetching GSoC data: {e}")
-        
+
     try:
         enrich_organizations()
     except Exception as e:
         print(f"Error enriching organizations: {e}")
-        
+
     try:
         fetch_contributions(limit=20)
     except Exception as e:
         print(f"Error syncing issues: {e}")
-        
+
     try:
         score_and_classify_issues()
     except Exception as e:
         print(f"Error scoring issues: {e}")
-        
+
     try:
         calculate_organization_scores()
     except Exception as e:
         print(f"Error scoring organizations: {e}")
-        
+
     print("Pipeline finished.")
 
 

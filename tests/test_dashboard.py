@@ -489,14 +489,14 @@ def test_api_radar_start_endpoint_triggers_run_daily(monkeypatch):
     import subprocess
     mock_popen = MagicMock()
     monkeypatch.setattr(subprocess, "Popen", mock_popen)
-    
+
     handler = CapturingHandler("/api/radar/start")
     handler.headers = {"Content-Length": "2"}
     handler.rfile = MagicMock()
     handler.rfile.read.return_value = b"{}"
-    
+
     DashboardHandler.do_POST(handler)
-    
+
     assert handler.status == 200
     mock_popen.assert_called_once()
     args, kwargs = mock_popen.call_args
@@ -507,7 +507,7 @@ def test_api_radar_start_endpoint_post_only(monkeypatch):
     """GET /api/radar/start is not allowed (method safety)."""
     handler = CapturingHandler("/api/radar/start")
     DashboardHandler.do_GET(handler)
-    
+
     # 404 or 405 depending on implementation. In our case we didn't add it to do_GET so it falls through to 404.
     assert handler.status == 404
 

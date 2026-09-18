@@ -101,7 +101,7 @@ HTML_TEMPLATE = """<!DOCTYPE html>
         .status-waiting { background: rgba(167, 139, 250, 0.2); color: #a78bfa; }
         .status-running { background: rgba(59, 130, 246, 0.2); color: #60a5fa; }
         .status-idle { background: rgba(148, 163, 184, 0.2); color: var(--text-muted); }
-        
+
         /* Implementation lifecycle timeline */
         .lc-timeline {
             display: flex;
@@ -134,7 +134,7 @@ HTML_TEMPLATE = """<!DOCTYPE html>
             50% { box-shadow: 0 0 0 6px rgba(59, 130, 246, 0.12); }
             100% { box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.25); }
         }
-        
+
         table {
             width: 100%;
             border-collapse: collapse;
@@ -152,7 +152,7 @@ HTML_TEMPLATE = """<!DOCTYPE html>
             letter-spacing: 0.05em;
         }
         tr:last-child td { border-bottom: none; }
-        
+
         .btn {
             background: var(--primary);
             color: white;
@@ -167,7 +167,7 @@ HTML_TEMPLATE = """<!DOCTYPE html>
             display: inline-block;
         }
         .btn:hover { background: var(--primary-hover); }
-        
+
         .btn-small {
             padding: 0.25rem 0.5rem;
             font-size: 0.75rem;
@@ -177,7 +177,7 @@ HTML_TEMPLATE = """<!DOCTYPE html>
             margin-bottom: 0.25rem;
         }
         .btn-small:hover { background: var(--primary); }
-        
+
         .event-log {
             font-family: monospace;
             font-size: 0.875rem;
@@ -190,7 +190,7 @@ HTML_TEMPLATE = """<!DOCTYPE html>
         .event-item:last-child { border-bottom: none; }
         .event-time { color: var(--primary); }
         .event-action { font-weight: bold; color: var(--text); }
-        
+
         .digest-content {
             white-space: pre-wrap;
             font-family: monospace;
@@ -202,7 +202,7 @@ HTML_TEMPLATE = """<!DOCTYPE html>
             max-height: 300px;
             overflow-y: auto;
         }
-        
+
         /* Modal */
         .modal {
             display: none;
@@ -242,7 +242,7 @@ HTML_TEMPLATE = """<!DOCTYPE html>
             overflow-x: auto;
             white-space: pre-wrap;
         }
-        
+
         .system-status {
             display: flex;
             flex-direction: column;
@@ -264,14 +264,14 @@ HTML_TEMPLATE = """<!DOCTYPE html>
                 <button class="btn" id="refresh-btn" onclick="fetchData()">Refresh Data</button>
             </div>
         </div>
-        
+
         <div class="grid">
             <div style="display: flex; flex-direction: column; gap: 2rem;">
                 <div class="card">
                     <h2>Top Opportunities</h2>
                     <div id="opportunities-content">Loading...</div>
                 </div>
-                
+
                 <div class="card" id="work-center-card">
                     <h2>Work Center</h2>
                     <div id="active-work-content" style="margin-bottom: 1rem;">Loading...</div>
@@ -281,13 +281,13 @@ HTML_TEMPLATE = """<!DOCTYPE html>
                     </div>
                     <div id="lifecycle-content" style="color: var(--text-muted); font-size: 0.9rem;">Enter an issue URL to see where it is in the local workflow.</div>
                 </div>
-                
+
                 <div class="card">
                     <h2>Latest Digest</h2>
                     <div id="digest-content" class="digest-content">Loading...</div>
                 </div>
             </div>
-            
+
             <div style="display: flex; flex-direction: column; gap: 2rem;">
                 <div class="card">
                     <h2>Today's Radar Run</h2>
@@ -329,7 +329,7 @@ HTML_TEMPLATE = """<!DOCTYPE html>
                         </div>
                     </div>
                 </div>
-                
+
                 <div class="card">
                     <h2>Recent Events</h2>
                     <div id="events-content" class="event-log">Loading...</div>
@@ -357,7 +357,7 @@ HTML_TEMPLATE = """<!DOCTYPE html>
             document.getElementById('myModal').style.display = "block";
             document.getElementById('copy-btn').innerText = "Copy to Clipboard";
         }
-        
+
         function closeModal() {
             document.getElementById('myModal').style.display = "none";
         }
@@ -368,7 +368,7 @@ HTML_TEMPLATE = """<!DOCTYPE html>
                 document.getElementById('copy-btn').innerText = "Copied!";
             });
         }
-        
+
         async function fetchEndpoint(url, title) {
             try {
                 const res = await fetch(url);
@@ -622,7 +622,7 @@ HTML_TEMPLATE = """<!DOCTYPE html>
                 }
                 // Keep the last snapshot for the Communication review modal.
                 window._radarData = data;
-                
+
                 // Render Hermes
                 const hs = document.getElementById('hermes-status');
                 if (data.hermes_available) {
@@ -632,7 +632,7 @@ HTML_TEMPLATE = """<!DOCTYPE html>
                     hs.className = "status-badge status-danger";
                     hs.innerText = "Unavailable: " + data.hermes_error;
                 }
-                
+
                 // Render Scheduler
                 const ss = document.getElementById('scheduler-status');
                 if (data.scheduler_status.includes("Installed and loaded")) {
@@ -645,7 +645,7 @@ HTML_TEMPLATE = """<!DOCTYPE html>
                     ss.className = "status-badge status-warning";
                     ss.innerText = data.scheduler_status;
                 }
-                
+
                 // Render Events
                 let eventsHtml = "";
                 if (data.events.length === 0) {
@@ -665,10 +665,10 @@ HTML_TEMPLATE = """<!DOCTYPE html>
                     });
                 }
                 document.getElementById('events-content').innerHTML = eventsHtml;
-                
+
                 // Render Digest
                 document.getElementById('digest-content').innerText = data.digest || "No digest found.";
-                
+
                 // Render Opportunities
                 let oppsHtml = "<table><tr><th>Repo/Issue</th><th>Score</th><th>Readiness / GSoC</th><th>Actions</th></tr>";
                 if (data.opportunities.length === 0) {
@@ -722,7 +722,7 @@ HTML_TEMPLATE = """<!DOCTYPE html>
                 }
                 activeWorkHtml += "</table>";
                 document.getElementById('active-work-content').innerHTML = activeWorkHtml;
-                
+
                 // Render freshness metadata (read-only local state)
                 const f = data.freshness || {};
                 document.getElementById('freshness-issues').innerText =
@@ -740,7 +740,7 @@ HTML_TEMPLATE = """<!DOCTYPE html>
                     errEl.innerText = 'Freshness unavailable: ' + f.error;
                     errEl.style.display = 'block';
                 }
-                
+
                 btn.innerText = 'Updated ' + new Date().toLocaleTimeString();
                 refreshStatus.className = "status-badge status-success";
                 refreshStatus.innerText = 'OK';
@@ -759,7 +759,7 @@ HTML_TEMPLATE = """<!DOCTYPE html>
                 btn.disabled = false;
             }
         }
-        
+
         window.onclick = function(event) {
             const modal = document.getElementById('myModal');
             if (event.target == modal) {
@@ -850,10 +850,10 @@ class DashboardHandler(BaseHTTPRequestHandler):
         self.send_header('Content-type', 'application/json')
         self.end_headers()
         self.wfile.write(json.dumps(data).encode('utf-8'))
-        
+
     def get_dashboard_data(self):
         data = {}
-        
+
         # Hermes status
         try:
             verify_local_provider()
@@ -862,10 +862,10 @@ class DashboardHandler(BaseHTTPRequestHandler):
         except Exception as e:
             data['hermes_available'] = False
             data['hermes_error'] = str(e)
-            
+
         # Scheduler status
         data['scheduler_status'] = schedule_status()
-        
+
         # Events
         logs = get_recent_logs(10)
         data['events'] = []
@@ -876,7 +876,7 @@ class DashboardHandler(BaseHTTPRequestHandler):
                 'result': log[4],
                 'message': log[5]
             })
-            
+
         # Digest
         import glob
         digests = glob.glob("digests/daily_*.md")
@@ -886,7 +886,7 @@ class DashboardHandler(BaseHTTPRequestHandler):
                 data['digest'] = f.read()
         else:
             data['digest'] = "No digests generated yet."
-            
+
         # Opportunities
         data['opportunities'] = []
         try:
@@ -898,14 +898,14 @@ class DashboardHandler(BaseHTTPRequestHandler):
                            i.communication_reason, i.communication_approved_at
                     FROM issues i
                     LEFT JOIN repositories r ON i.repo_name = r.name
-                    WHERE i.state = 'OPEN' 
+                    WHERE i.state = 'OPEN'
                     AND (i.eligibility_status IS NULL OR i.eligibility_status NOT IN ('BLOCKED', 'SOLVED', 'DUPLICATE', 'BLOCKED_STUDENT_WORK_REPO', 'BLOCKED_RELATED_PR', 'LIKELY_SOLVED'))
                     AND (i.activity_status IS NULL OR i.activity_status IN ('ACTIVE', 'LIKELY_ACTIVE'))
                     AND (i.assignee_status IS NULL OR i.assignee_status != 'ASSIGNED')
                     AND (r.repo_eligibility IS NULL OR r.repo_eligibility NOT IN ('BLOCKED_STUDENT_WORK_REPO', 'BLOCKED_ARCHIVED', 'BLOCKED_FORK_OR_MIRROR'))
                 ''')
                 rows = cursor.fetchall()
-                
+
                 scored_candidates = []
                 for row in rows:
                     (url, repo_name, issue_number, title, body_preview, org_slug,
@@ -916,7 +916,7 @@ class DashboardHandler(BaseHTTPRequestHandler):
                         cur2.execute("SELECT gsoc_preparation_score FROM issues WHERE url = ?", (url,))
                         row2 = cur2.fetchone()
                         gsoc = row2[0] if row2 else None
-                        
+
                         readiness, _ = check_release_prerequisites(repo_name, title, body_preview)
                         if readiness == "READY_NOW":
                             scored_candidates.append({
@@ -929,7 +929,7 @@ class DashboardHandler(BaseHTTPRequestHandler):
                                     "approved_at": comm_approved_at,
                                 },
                             })
-                            
+
                 scored_candidates.sort(key=lambda x: x["score"], reverse=True)
                 data['opportunities'] = scored_candidates[:5]
         except Exception as e:
@@ -944,9 +944,9 @@ class DashboardHandler(BaseHTTPRequestHandler):
                 cols = [c[1] for c in cursor.fetchall()]
                 if 'lifecycle_status' in cols:
                     cursor.execute('''
-                        SELECT url, repo_name, issue_number, title, lifecycle_status 
-                        FROM issues 
-                        WHERE lifecycle_status IS NOT NULL 
+                        SELECT url, repo_name, issue_number, title, lifecycle_status
+                        FROM issues
+                        WHERE lifecycle_status IS NOT NULL
                         AND lifecycle_status NOT IN ('NEW', 'DISMISSED', '')
                     ''')
                     for row in cursor.fetchall():
@@ -972,7 +972,7 @@ class DashboardHandler(BaseHTTPRequestHandler):
             self.send_header('Content-type', 'text/html')
             self.end_headers()
             self.wfile.write(HTML_TEMPLATE.encode('utf-8'))
-            
+
         elif self.path == '/api/data':
             # Read-only snapshot; failures are surfaced to the UI instead of
             # only appearing in server logs/console.
@@ -982,7 +982,7 @@ class DashboardHandler(BaseHTTPRequestHandler):
                 self.send_json(
                     {"error": f"Failed to load dashboard data: {e}"}, 500
                 )
-            
+
         elif self.path.startswith('/api/prompt'):
             qs = urllib.parse.parse_qs(urllib.parse.urlparse(self.path).query)
             url = qs.get('url', [None])[0]
@@ -991,7 +991,7 @@ class DashboardHandler(BaseHTTPRequestHandler):
                 return
             prompt = generate_implementation_prompt(url)
             self.send_json({"content": prompt})
-            
+
         elif self.path.startswith('/api/workspace'):
             qs = urllib.parse.parse_qs(urllib.parse.urlparse(self.path).query)
             url = qs.get('url', [None])[0]
@@ -1006,11 +1006,11 @@ class DashboardHandler(BaseHTTPRequestHandler):
             repo_name = issue.get('repo_name')
             repo_short = repo_name.split('/')[1] if '/' in repo_name else repo_name
             issue_id = issue.get('issue_number')
-            
+
             from src.workspace_manager import WORKSPACES_ROOT
             wt_path = WORKSPACES_ROOT / org_slug / repo_short / "worktrees" / str(issue_id)
             self.send_json({"path": str(wt_path)})
-            
+
         elif self.path.startswith('/api/research'):
             qs = urllib.parse.parse_qs(urllib.parse.urlparse(self.path).query)
             url = qs.get('url', [None])[0]
@@ -1032,7 +1032,7 @@ class DashboardHandler(BaseHTTPRequestHandler):
                     self.send_json({"content": f.read()})
             else:
                 self.send_json({"content": "(No research report found. Run hermes research first.)"})
-                
+
         elif self.path.startswith('/api/plan'):
             qs = urllib.parse.parse_qs(urllib.parse.urlparse(self.path).query)
             url = qs.get('url', [None])[0]

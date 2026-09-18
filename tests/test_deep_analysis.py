@@ -28,17 +28,17 @@ def test_calculate_gsoc_score():
     gsoc_projects = [
         {"title": "Add feature to my-cool-project", "technologies": "Python, Java", "short_description": "Fix it"}
     ]
-    
+
     # Base score test (SUBSTANTIAL, BUG_FIX, no history)
     score, ev = calculate_gsoc_score("SUBSTANTIAL", "BUG_FIX", 0.0, [], {})
     assert score == 20.0 # 10 (substantial) + 10 (bug_fix)
-    
+
     # Full match test (history + repo match + tech match + substantial + bug_fix)
     score, ev = calculate_gsoc_score("SUBSTANTIAL", "BUG_FIX", 100.0, gsoc_projects, issue)
     assert score == 90.0 # 30(org) + 30(repo) + 10(tech) + 10(sub) + 10(bug) = 90
     assert "Org History: +30" in ev
     assert "Project History: +30" in ev
-    
+
     # Penalties test
     score, ev = calculate_gsoc_score("TRIVIAL", "DOCUMENTATION", 0.0, [], {})
     assert score == 0.0 # 0 (capped from -30)
@@ -48,7 +48,7 @@ def test_find_likely_files():
     files = find_likely_files("Please update src/database.py and tests/test_deep.cpp!")
     assert "src/database.py" in files
     assert "tests/test_deep.cpp" in files
-    
+
     # ensure it doesn't match normal periods
     files2 = find_likely_files("This is a sentence. It ends here.")
     assert len(files2) == 0

@@ -11,10 +11,10 @@ def test_run_hermes_oneshot_cwd_flags(monkeypatch, tmp_path):
             returncode = 0
             stdout = "mocked"
         return MockResult()
-        
+
     import src.hermes_agent
     monkeypatch.setattr(src.hermes_agent.subprocess, "run", mock_run)
-    
+
     run_hermes_oneshot("test prompt", cwd=str(tmp_path))
     import platform
     if platform.system() == "Darwin":

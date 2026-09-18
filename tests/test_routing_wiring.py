@@ -125,12 +125,12 @@ def test_difficult_planning_invokes_heavy_route(monkeypatch, tmp_path):
     (tmp_path / "research.md").write_text("[FACT] Research")
     monkeypatch.setattr(
         "src.hermes_agent.run_hermes_oneshot",
-        lambda prompt, **kwargs: "[FACT] Plan",
+        lambda prompt, **kwargs: "TARGET FILES:\nsrc/main.py\nTARGET SYMBOL:\nn/a\nACCEPTANCE CRITERIA:\nworks well\n[FACT] Plan\nTARGETED TEST:\npytest test.py",
     )
 
     assert plan(5) is True
     assert calls == ["heavy"]
-    assert (tmp_path / "plan.md").read_text() == "[FACT] Plan"
+    assert (tmp_path / "plan.md").read_text() == "TARGET FILES:\nsrc/main.py\nTARGET SYMBOL:\nn/a\nACCEPTANCE CRITERIA:\nworks well\n[FACT] Plan\nTARGETED TEST:\npytest test.py"
 
 
 def test_planning_now_always_heavy(monkeypatch, tmp_path):
@@ -154,7 +154,7 @@ def test_planning_now_always_heavy(monkeypatch, tmp_path):
     (tmp_path / "research.md").write_text("[FACT] Research")
     monkeypatch.setattr(
         "src.hermes_agent.run_hermes_oneshot",
-        lambda prompt, **kwargs: "[FACT] Plan",
+        lambda prompt, **kwargs: "TARGET FILES:\nsrc/main.py\nTARGET SYMBOL:\nn/a\nACCEPTANCE CRITERIA:\nworks well\n[FACT] Plan\nTARGETED TEST:\npytest test.py",
     )
 
     assert plan(5) is True
@@ -308,7 +308,9 @@ def test_ordinary_research_stays_lightweight(monkeypatch, tmp_path):
 # --- e. no other callers accidentally change task class ----------------------
 
 
-def test_validate_hermes_execution_stays_lightweight(monkeypatch):
+def test_validate_hermes_execution_uses_heavy_routing(monkeypatch):
+    """validate_hermes_execution must probe OmniRoute (task_type='heavy')
+    so remote providers bypass the local memory gate."""
     calls = []
 
     def fake_plan(**kwargs):
@@ -323,4 +325,4 @@ def test_validate_hermes_execution_stays_lightweight(monkeypatch):
 
     assert ok is True
     assert "validated" in reason
-    assert calls == [{}]
+    assert calls == [{"task_type": "heavy"}]

@@ -21,20 +21,20 @@ def test_generate_implementation_prompt_all_data(mock_open, mock_exists, mock_ge
         'build_systems': 'Maven',
         'test_frameworks': 'JUnit'
     }
-    
+
     mock_dir = MagicMock()
     mock_file = MagicMock()
     mock_file.exists.return_value = True
-    
+
     mock_file_open = MagicMock()
     mock_file_open.__enter__.return_value.read.side_effect = ["Research contents", "Plan contents"]
     mock_open.return_value = mock_file_open
-    
+
     mock_dir.__truediv__.return_value = mock_file
     mock_get_reports_dir.return_value = mock_dir
-    
+
     prompt = generate_implementation_prompt(123)
-    
+
     assert "# Implementation Task: org/repo#123" in prompt
     assert "**Title:** Test Issue" in prompt
     assert "**Labels:** bug, help wanted" in prompt
@@ -70,9 +70,9 @@ def test_generate_implementation_prompt_missing_data(mock_exists, mock_get_repor
     mock_file.exists.return_value = False
     mock_dir.__truediv__.return_value = mock_file
     mock_get_reports_dir.return_value = mock_dir
-    
+
     prompt = generate_implementation_prompt(123)
-    
+
     assert "*(No repository analysis available)*" in prompt
     assert "*(No automated research available)*" in prompt
     assert "*(No automated plan available)*" in prompt

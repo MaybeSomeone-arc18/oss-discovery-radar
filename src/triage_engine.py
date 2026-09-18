@@ -25,7 +25,7 @@ def generate_digest(issues):
 
     today = datetime.now().strftime("%Y-%m-%d")
     digest_filename = f"digests/digest_{today}.md"
-    
+
     # Ensure directory exists
     os.makedirs("digests", exist_ok=True)
 
@@ -53,7 +53,7 @@ def generate_digest(issues):
     with open(digest_filename, "w", encoding="utf-8") as f:
         f.write(f"# OSS Discovery Radar - Daily Digest ({today})\n\n")
         f.write("This digest contains unassigned issues from target organizations created in the last 48 hours.\n\n")
-        
+
         f.write("## 🌟 High Priority: Good First Issues\n\n")
         if not hp_grouped:
              f.write("*No 'Good First Issues' found today.*\n\n")
@@ -84,6 +84,6 @@ def generate_digest(issues):
                     f.write(f"  - Created: {issue['created_at']}\n")
                     preview = issue['body_preview'].replace('\n', ' ').strip()
                     f.write(f"  - Preview: *{preview}*\n\n")
-                    
+
     print(f"Digest successfully generated: {digest_filename}")
     return digest_filename

@@ -31,22 +31,22 @@ def test_generate_daily_digest_hermes_trigger(mock_open, mock_plan, mock_researc
         (2,)  # score inc
     ]
     mock_conn.return_value.__enter__.return_value.cursor.return_value = mock_cursor
-    
+
     # Mock score high enough to trigger
     mock_score.return_value = (85.0, "notes")
     mock_prereq.return_value = ("READY_NOW", "ev")
-    
+
     mock_config.return_value = {'hermes_auto_trigger_threshold': 80.0}
     mock_preflight.return_value = (True, 'OK')
     mock_research.return_value = True
     mock_plan.return_value = True
-    
+
     generate_daily_digest()
-    
+
     # Check that Hermes was triggered
     mock_research.assert_called_once_with('url1')
     mock_plan.assert_called_once_with('url1')
-    
+
     # Check that it opened the file to write
     mock_open.assert_called_once()
 
@@ -66,15 +66,15 @@ def test_generate_daily_digest_no_trigger_low_score(mock_open, mock_research, mo
     ]
     mock_cursor.fetchone.side_effect = [(10,), (0,), (0,)]
     mock_conn.return_value.__enter__.return_value.cursor.return_value = mock_cursor
-    
+
     # Mock score lower than threshold
     mock_score.return_value = (75.0, "notes")
     mock_prereq.return_value = ("READY_NOW", "ev")
-    
+
     mock_config.return_value = {'hermes_auto_trigger_threshold': 80.0}
-    
+
     generate_daily_digest()
-    
+
     # Hermes should NOT be triggered
     mock_research.assert_not_called()
 

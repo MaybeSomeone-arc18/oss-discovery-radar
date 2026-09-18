@@ -28,7 +28,7 @@ def test_get_available_memory_mb_non_mac():
 def test_check_resources_for_hermes_success(mock_disk, mock_mem):
     mock_mem.return_value = 8000
     mock_disk.return_value = (100000000000, 50000000000, 50000000000) # ~47GB free
-    
+
     ok, msg = check_resources_for_hermes(min_memory_mb=4096, min_disk_mb=2048)
     assert ok is True
     assert "Resources sufficient" in msg
@@ -38,7 +38,7 @@ def test_check_resources_for_hermes_success(mock_disk, mock_mem):
 def test_check_resources_for_hermes_low_mem(mock_disk, mock_mem):
     mock_mem.return_value = 2000
     mock_disk.return_value = (100000000000, 50000000000, 50000000000)
-    
+
     ok, msg = check_resources_for_hermes(min_memory_mb=4096, min_disk_mb=2048)
     assert ok is False
     assert "Insufficient memory" in msg
@@ -48,7 +48,7 @@ def test_check_resources_for_hermes_low_mem(mock_disk, mock_mem):
 def test_check_resources_for_hermes_low_disk(mock_disk, mock_mem):
     mock_mem.return_value = 8000
     mock_disk.return_value = (100000000000, 99000000000, 1000000000) # ~950MB free
-    
+
     ok, msg = check_resources_for_hermes(min_memory_mb=4096, min_disk_mb=2048)
     assert ok is False
     assert "Insufficient disk" in msg

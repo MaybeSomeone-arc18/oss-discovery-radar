@@ -42,7 +42,7 @@ def test_retry_uses_exact_url(monkeypatch):
     )
     monkeypatch.setattr(
         "src.autonomous_contributor.get_hermes_execution_plan",
-        lambda: (True, "llama3.2:3b", "validated"),
+        lambda **kwargs: (True, "llama3.2:3b", "validated"),
     )
     monkeypatch.setattr(
         "src.autonomous_contributor._run_pipeline",
@@ -205,7 +205,7 @@ def test_start_work_reuses_existing_path_without_regeneration(monkeypatch):
     )
     monkeypatch.setattr(
         "src.autonomous_contributor.get_hermes_execution_plan",
-        lambda: (True, "llama3.2:3b", "validated"),
+        lambda **kwargs: (True, "llama3.2:3b", "validated"),
     )
 
     def record_pipeline(issue_url, *, regenerate_communication=True):

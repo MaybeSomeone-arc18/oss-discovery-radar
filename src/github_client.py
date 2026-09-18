@@ -49,7 +49,7 @@ def format_discussion_context(body_text, author_login="Unknown", author_associat
             c_body = (comment.get("bodyText") or comment.get("body") or "").strip()
             if len(c_body) > 1000:
                 c_body = c_body[:1000] + "\n[...comment truncated...]"
-            
+
             header = f"[Comment #{idx} by {c_role} at {c_created}]:"
             parts.append(f"\n{header}\n{c_body if c_body else '(empty comment)'}")
 
@@ -132,17 +132,17 @@ def fetch_issues():
             continue
 
         edges = data.get("data", {}).get("search", {}).get("edges", [])
-        
+
         for edge in edges:
             node = edge.get("node", {})
             if not node:
                 continue
-                
+
             labels = [label["name"] for label in node.get("labels", {}).get("nodes", [])]
             author_data = node.get("author") or {}
             author_login = author_data.get("login", "Unknown")
             author_assoc = author_data.get("association")
-            
+
             comments_data = node.get("comments", {}).get("nodes", [])
             discussion_ctx = format_discussion_context(
                 node.get("bodyText", ""),
@@ -150,7 +150,7 @@ def fetch_issues():
                 author_assoc,
                 comments_data
             )
-            
+
             issue = {
                 "title": node.get("title"),
                 "url": node.get("url"),
@@ -169,16 +169,16 @@ def fetch_issues():
 def check_related_prs(repo_name, issue_number):
     if not GITHUB_TOKEN:
         return []
-    
+
     headers = {
         "Authorization": f"Bearer {GITHUB_TOKEN}",
         "Accept": "application/vnd.github.v3+json"
     }
-    
+
     # Check for PRs mentioning the issue number
     q = f"repo:{repo_name} type:pr {issue_number}"
     url = "https://api.github.com/search/issues"
-    
+
     prs = []
     try:
         response = requests.get(url, params={"q": q}, headers=headers, timeout=10)
@@ -198,14 +198,14 @@ def check_related_prs(repo_name, issue_number):
         raise
     except Exception as e:
         print(f"Error checking related PRs for {repo_name}#{issue_number}: {e}")
-        
+
     # Check for recent commits mentioning the issue number (Milestone 11 enhancement)
     q_commit = f"repo:{repo_name} {issue_number}"
     url_commit = f"https://api.github.com/search/commits?q={q_commit}"
     # Commits search requires a specific accept header
     commit_headers = headers.copy()
     commit_headers["Accept"] = "application/vnd.github.cloak-preview+json"
-    
+
     try:
         response_commit = requests.get(url_commit, headers=commit_headers, timeout=10)
         if response_commit.status_code == 200:
@@ -224,18 +224,18 @@ def check_related_prs(repo_name, issue_number):
 def fetch_contribution_model(repo_name):
     if not GITHUB_TOKEN:
         return {}
-    
+
     headers = {
         "Authorization": f"Bearer {GITHUB_TOKEN}",
         "Accept": "application/vnd.github.v3+json"
     }
-    
+
     model = {
         "has_contributing": False,
         "has_pr_template": False,
         "has_issue_template": False
     }
-    
+
     # Try fetching CONTRIBUTING.md
     try:
         url = f"https://api.github.com/repos/{repo_name}/contents/CONTRIBUTING.md"
@@ -244,6 +244,6 @@ def fetch_contribution_model(repo_name):
             model["has_contributing"] = True
     except:
         pass
-        
+
     return model
 

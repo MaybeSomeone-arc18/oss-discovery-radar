@@ -6,11 +6,11 @@ from contextlib import contextmanager
 @contextmanager
 def get_connection():
     db_path = config.DB_PATH
-    
+
     is_test = "PYTEST_CURRENT_TEST" in os.environ or os.environ.get("IS_PYTEST") == "1"
     if is_test and ("data/radar.db" in db_path or db_path == "data/radar.db"):
         raise RuntimeError(f"CRITICAL SAFETY ERROR: Test suite is attempting to connect to production database: {db_path}")
-        
+
     os.makedirs(os.path.dirname(db_path) or '.', exist_ok=True)
     conn = sqlite3.connect(db_path, timeout=5.0)
     try:
@@ -22,7 +22,7 @@ def get_connection():
 def init_db():
     with get_connection() as conn:
         cursor = conn.cursor()
-        
+
         # Organizations
         cursor.execute('''
         CREATE TABLE IF NOT EXISTS organizations (
@@ -33,7 +33,7 @@ def init_db():
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         )
         ''')
-        
+
         # GSoC Years mapping
         cursor.execute('''
         CREATE TABLE IF NOT EXISTS gsoc_years (
@@ -43,7 +43,7 @@ def init_db():
             FOREIGN KEY (org_slug) REFERENCES organizations(slug)
         )
         ''')
-        
+
         # GSoC Projects
         cursor.execute('''
         CREATE TABLE IF NOT EXISTS gsoc_projects (
@@ -61,7 +61,7 @@ def init_db():
             UNIQUE(org_slug, year, title)
         )
         ''')
-        
+
         # Migration: Add columns if they do not exist
         cursor.execute("PRAGMA table_info(gsoc_projects)")
         columns = [col[1] for col in cursor.fetchall()]
@@ -84,7 +84,7 @@ def init_db():
             cursor.execute("ALTER TABLE organizations ADD COLUMN is_verified_github BOOLEAN DEFAULT 0")
         if 'opportunity_confidence' not in org_columns:
             cursor.execute("ALTER TABLE organizations ADD COLUMN opportunity_confidence TEXT")
-            
+
         # Repositories
         cursor.execute('''
         CREATE TABLE IF NOT EXISTS repositories (
@@ -121,7 +121,7 @@ def init_db():
             FOREIGN KEY (repo_name) REFERENCES repositories(name)
         )
         ''')
-        
+
         # Pull Requests
         cursor.execute('''
         CREATE TABLE IF NOT EXISTS pull_requests (
@@ -138,9 +138,9 @@ def init_db():
             FOREIGN KEY (repo_name) REFERENCES repositories(name)
         )
         ''')
-        
+
         # Issues
-        
+
         # Daily Runs - tracks manual daily pipeline executions
         cursor.execute('''
         CREATE TABLE IF NOT EXISTS daily_runs (
@@ -151,7 +151,7 @@ def init_db():
             error_message TEXT
         )
         ''')
-        
+
         # Audit Logs
         cursor.execute('''
         CREATE TABLE IF NOT EXISTS audit_logs (
@@ -163,7 +163,7 @@ def init_db():
             message TEXT
         )
         ''')
-        
+
         cursor.execute('''
         CREATE TABLE IF NOT EXISTS issues (
             url TEXT PRIMARY KEY,
@@ -176,7 +176,7 @@ def init_db():
             FOREIGN KEY (repo_name) REFERENCES repositories(name)
         )
         ''')
-        
+
         # Migration: Add columns to issues if they do not exist
         cursor.execute("PRAGMA table_info(issues)")
         issue_columns = [col[1] for col in cursor.fetchall()]
@@ -214,7 +214,7 @@ def init_db():
             cursor.execute("ALTER TABLE issues ADD COLUMN gsoc_preparation_score REAL")
         if 'contribution_value_score' not in issue_columns:
             cursor.execute("ALTER TABLE issues ADD COLUMN contribution_value_score REAL")
-            
+
         # Milestone 9: Opportunity Memory
         if 'first_seen_at' not in issue_columns:
             cursor.execute("ALTER TABLE issues ADD COLUMN first_seen_at TIMESTAMP")
@@ -248,11 +248,11 @@ def init_db():
             cursor.execute("ALTER TABLE issues ADD COLUMN dismissed BOOLEAN DEFAULT 0")
         if 'dismissal_reason' not in issue_columns:
             cursor.execute("ALTER TABLE issues ADD COLUMN dismissal_reason TEXT")
-        
+
         # Milestone 10 Correction: Eligibility Gate
         if 'eligibility_status' not in issue_columns:
             cursor.execute("ALTER TABLE issues ADD COLUMN eligibility_status TEXT DEFAULT 'UNKNOWN'")
-            
+
         # Milestone 11: Real Contribution Selection
         if 'first_contribution_score' not in issue_columns:
             cursor.execute("ALTER TABLE issues ADD COLUMN first_contribution_score REAL")
@@ -264,7 +264,7 @@ def init_db():
             cursor.execute("ALTER TABLE issues ADD COLUMN readiness_evidence TEXT")
         if 'gsoc_evidence' not in issue_columns:
             cursor.execute("ALTER TABLE issues ADD COLUMN gsoc_evidence TEXT")
-        
+
         # Anti-spam & Personal Learning
         if 'cooldown_until' not in issue_columns:
             cursor.execute("ALTER TABLE issues ADD COLUMN cooldown_until TIMESTAMP")
@@ -284,7 +284,7 @@ def init_db():
             cursor.execute("ALTER TABLE issues ADD COLUMN user_notes TEXT")
         if 'skills_learned' not in issue_columns:
             cursor.execute("ALTER TABLE issues ADD COLUMN skills_learned TEXT")
-            
+
         # Repository Analysis
         cursor.execute('''
         CREATE TABLE IF NOT EXISTS repository_analysis (
@@ -300,7 +300,7 @@ def init_db():
             FOREIGN KEY (repo_name) REFERENCES repositories(name)
         )
         ''')
-            
+
         conn.commit()
 
 def save_organization(slug, name, url=None, year=None):
@@ -314,7 +314,7 @@ def save_organization(slug, name, url=None, year=None):
             url=COALESCE(excluded.url, organizations.url),
             year_first_seen=COALESCE(organizations.year_first_seen, excluded.year_first_seen)
         ''', (slug, name, url, year))
-        
+
         if year:
             cursor.execute('''
             INSERT OR IGNORE INTO gsoc_years (org_slug, year)
@@ -347,7 +347,7 @@ def save_repository_metrics(repo_name, issues_created, issues_closed, prs_opened
         cursor = conn.cursor()
         cursor.execute('''
         INSERT INTO repository_metrics (
-            repo_name, issues_created_recently, issues_closed_recently, prs_opened_recently, 
+            repo_name, issues_created_recently, issues_closed_recently, prs_opened_recently,
             prs_merged_recently, prs_external, recent_commits, maintainer_response_time_hours, review_merge_activity_score
         )
         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
@@ -439,7 +439,7 @@ def update_issue_opportunity(url, score, activity_status):
     with get_connection() as conn:
         cursor = conn.cursor()
         cursor.execute('''
-        UPDATE issues SET 
+        UPDATE issues SET
             previous_score = COALESCE(current_score, opportunity_score),
             current_score = ?,
             score_delta = ? - COALESCE(current_score, opportunity_score),
@@ -447,13 +447,13 @@ def update_issue_opportunity(url, score, activity_status):
             activity_status = ?
         WHERE url = ?
         ''', (score, score, score, activity_status, url))
-        
+
         # Reset cooldown if score delta is significant
         cursor.execute('''
         UPDATE issues SET cooldown_until = NULL
         WHERE url = ? AND (score_delta > 1.0 OR score_delta < -1.0)
         ''', (url,))
-        
+
         conn.commit()
 
 def update_issue_deep_analysis(url, issue_quality, contribution_type, engineering_depth, gsoc_score, contribution_score, gsoc_evidence=None):
@@ -511,7 +511,7 @@ def save_repository_analysis(repo_name, has_readme, has_contributing, has_code_o
             build_systems=excluded.build_systems,
             pr_patterns=excluded.pr_patterns,
             analyzed_at=CURRENT_TIMESTAMP
-        ''', (repo_name, has_readme, has_contributing, has_code_of_conduct, description, 
+        ''', (repo_name, has_readme, has_contributing, has_code_of_conduct, description,
               json.dumps(test_frameworks), json.dumps(build_systems), json.dumps(pr_patterns)))
         conn.commit()
 
@@ -521,16 +521,16 @@ def get_stats():
         cursor = conn.cursor()
         cursor.execute("SELECT COUNT(*) FROM organizations")
         stats['organizations'] = cursor.fetchone()[0]
-        
+
         cursor.execute("SELECT COUNT(DISTINCT year) FROM gsoc_years")
         stats['years'] = cursor.fetchone()[0]
-        
+
         cursor.execute("SELECT COUNT(*) FROM gsoc_projects")
         stats['projects'] = cursor.fetchone()[0]
-        
+
         cursor.execute("SELECT COUNT(*) FROM repositories")
         stats['repositories'] = cursor.fetchone()[0]
-        
+
         cursor.execute("SELECT COUNT(*) FROM issues")
         stats['issues'] = cursor.fetchone()[0]
     return stats

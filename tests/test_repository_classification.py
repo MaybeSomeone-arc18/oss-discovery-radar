@@ -20,7 +20,7 @@ def test_normal_project(mock_post):
         }
     }
     mock_post.return_value = mock_resp
-    
+
     classification, eligibility, ev, up, conf = classify_repository("ankidroid/Anki-Android")
     assert classification == "NORMAL_PROJECT"
     assert eligibility == "ELIGIBLE"
@@ -48,7 +48,7 @@ def test_gsoc_student_repo(mock_post):
         }
     }
     mock_post.return_value = mock_resp
-    
+
     classification, eligibility, ev, up, conf = classify_repository("dora-rs/gsoc2026-dora-studio")
     assert classification == "GSOC_PROJECT_REPOSITORY"
     assert eligibility == "BLOCKED_STUDENT_WORK_REPO"
@@ -69,7 +69,7 @@ def test_fork_mirror(mock_post):
         }
     }
     mock_post.return_value = mock_resp
-    
+
     classification, eligibility, ev, up, conf = classify_repository("user/forked-repo")
     assert classification == "FORK_OR_MIRROR"
     assert eligibility == "BLOCKED_FORK_OR_MIRROR"
@@ -94,7 +94,7 @@ def test_normal_project_with_gsoc_docs(mock_post):
         }
     }
     mock_post.return_value = mock_resp
-    
+
     classification, eligibility, ev, up, conf = classify_repository("user/normal-project")
     assert classification == "NORMAL_PROJECT"
     assert eligibility == "ELIGIBLE"

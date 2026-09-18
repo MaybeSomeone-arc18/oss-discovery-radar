@@ -7,13 +7,13 @@ def test_calculate_personal_fit():
         "skills": ["Python", "Rust"],
         "interests": ["networking", "systems"]
     }
-    
+
     tags = ["Rust", "networking"]
     title = "Fix socket bug in rust core"
     body = "The python wrapper is also broken"
-    
+
     score = contribution_engine.calculate_personal_fit(tags, title, body, profile)
-    
+
     # Rust (10) + networking (5) + Python in text (5) + rust in text (5) = 25
     assert score > 0
 
@@ -25,7 +25,7 @@ def test_parse_date():
 def test_save_and_fetch_issue():
     database.init_db()
     database.save_repository("test-org/test-repo", "http://github.com", "test-org", 0, 0, 0, 0, None, None, False, "main")
-    
+
     database.save_issue(
         url="http://github.com/issue/999999999",
         repo_name="test-org/test-repo",
@@ -43,7 +43,7 @@ def test_save_and_fetch_issue():
         milestone=None,
         classified_tags=["Rust"]
     )
-    
+
     database.save_pull_request(
         url="http://github.com/pr/999999999",
         pr_number=999999999,
@@ -56,12 +56,12 @@ def test_save_and_fetch_issue():
         author="testuser",
         review_comments_count=1
     )
-    
+
     with database.get_connection() as conn:
         cursor = conn.cursor()
         cursor.execute("SELECT title FROM issues WHERE issue_number = 999999999")
         assert cursor.fetchone()[0] == "Test Issue"
-        
+
         cursor.execute("SELECT title FROM pull_requests WHERE pr_number = 999999999")
         assert cursor.fetchone()[0] == "Test PR"
 

@@ -10,12 +10,12 @@ def test_check_release_prerequisites_unreleased(mock_get):
     mock_resp.status_code = 200
     mock_resp.json.return_value = [{"name": "2.24.0"}]
     mock_get.return_value = mock_resp
-    
+
     title = "Cleanup"
     body = "Only work on this after 2.25.0 is released"
-    
+
     status, evidence = check_release_prerequisites("ankidroid/Anki-Android", title, body)
-    
+
     assert status == "WAITING_ON_RELEASE"
     assert "2.25.0" in evidence
 
@@ -26,12 +26,12 @@ def test_check_release_prerequisites_released(mock_get):
     mock_resp.status_code = 200
     mock_resp.json.return_value = [{"name": "v2.25.0"}, {"name": "2.24.0"}]
     mock_get.return_value = mock_resp
-    
+
     title = "Cleanup"
     body = "Only work on this after 2.25.0 is released"
-    
+
     status, evidence = check_release_prerequisites("ankidroid/Anki-Android", title, body)
-    
+
     assert status == "READY_NOW"
 
 def test_check_release_prerequisites_no_prereq():
@@ -50,7 +50,7 @@ def test_check_release_prerequisites_no_prereq():
 def test_first_contribution_filtering_and_diversity(mock_prereq, mock_analyze, mock_update, mock_model, mock_prs, mock_score, mock_conn, capsys):
     # Setup mock db
     mock_cursor = MagicMock()
-    
+
     # Return 5 candidates from the same repo and 1 from another
     mock_cursor.fetchall.return_value = [
         ("url1", "repoA", 1, "t1", "b1", "orgA", 10.0, 10.0, "MEDIUM"),
@@ -62,18 +62,18 @@ def test_first_contribution_filtering_and_diversity(mock_prereq, mock_analyze, m
     ]
     mock_cursor.fetchone.return_value = (10.0, "MEDIUM", None)
     mock_conn.return_value.__enter__.return_value.cursor.return_value = mock_cursor
-    
+
     # All get high score
     mock_score.return_value = (50.0, "good")
     mock_prs.return_value = []
     mock_model.return_value = {"has_contributing": True}
     mock_prereq.return_value = ("READY_NOW", "good")
-    
+
     main.cmd_first_contribution()
-    
+
     captured = capsys.readouterr()
     output = captured.out
-    
+
     # Max 3 from repoA should be in output
     assert output.count("repoA") >= 3
     # Wait, the output lines will contain the name.
@@ -81,7 +81,7 @@ def test_first_contribution_filtering_and_diversity(mock_prereq, mock_analyze, m
     repo_a_lines = [line for line in output.split('\n') if 'repoA' in line and '|' in line]
     # Remove the RECOMMENDED CANDIDATE block which also prints repoA
     table_lines = [l for l in repo_a_lines if "1 " in l or "2 " in l or "3 " in l or "4 " in l]
-    
+
     assert len(table_lines) == 3
     assert "repoB" in output
 
@@ -104,23 +104,23 @@ def test_first_contribution_hermes_handoff_and_dynamic_refetch(mock_plan, mock_r
     # Re-fetch dynamic fields cursor
     mock_cur2 = MagicMock()
     mock_cur2.fetchone.return_value = (50.0, "SUBSTANTIAL", None)
-    
+
     mock_conn.return_value.__enter__.return_value.cursor.side_effect = [mock_cursor, mock_cur2, mock_cur2]
-    
+
     mock_score.return_value = (90.0, "good")
     mock_prs.return_value = []
     mock_model.return_value = {"has_contributing": True} # STRONG_CANDIDATE
     mock_prereq.return_value = ("READY_NOW", "good")
-    
+
     main.cmd_first_contribution()
-    
+
     captured = capsys.readouterr()
     output = captured.out
-    
+
     # Verify Hermes handoff used the NUMERIC issue id
     mock_research.assert_called_once_with(999)
     mock_plan.assert_called_once_with(999)
-    
+
     # Verify the dynamic fields were refetched and printed
     assert "Engineering Depth: SUBSTANTIAL" in output
     assert "GSoC Value: 50.0" in output

@@ -8,11 +8,11 @@ from src.ollama_manager import install_ollama, remove_ollama, ollama_status, get
 @patch('subprocess.run')
 def test_install_ollama_success(mock_run, mock_open, mock_mkdir, mock_which):
     mock_which.return_value = '/usr/local/bin/ollama'
-    
+
     mock_run_result = MagicMock()
     mock_run_result.returncode = 0
     mock_run.return_value = mock_run_result
-    
+
     success, msg = install_ollama()
     assert success is True
     assert "installed and started" in msg
@@ -51,7 +51,7 @@ def test_ollama_status_running(mock_run, mock_exists):
     mock_result = MagicMock()
     mock_result.stdout = "12345 0 com.oss.discovery.ollama\n"
     mock_run.return_value = mock_result
-    
+
     status = ollama_status()
     assert status == "Installed and running in launchd."
 
@@ -62,6 +62,6 @@ def test_ollama_status_not_running(mock_run, mock_exists):
     mock_result = MagicMock()
     mock_result.stdout = ""
     mock_run.return_value = mock_result
-    
+
     status = ollama_status()
     assert status == "Installed (plist exists) but not running in launchd."

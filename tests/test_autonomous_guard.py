@@ -122,6 +122,11 @@ def test_validate_hermes_execution_allows_3b_fallback(monkeypatch):
         "src.autonomous_guard.get_available_memory_mb",
         lambda: 6000,
     )
+    # OmniRoute unavailable so the heavy path falls through to local 3b
+    monkeypatch.setattr(
+        "src.autonomous_guard.omniroute_is_available_cached",
+        lambda: False,
+    )
 
     ok, reason = validate_hermes_execution()
 
@@ -490,7 +495,7 @@ def test_handoff_implementation_routes_to_registry(monkeypatch):
     monkeypatch.setattr("src.autonomous_guard.check_resources_for_hermes", lambda: (True, "Resources sufficient"))
     monkeypatch.setattr("src.implementation_models.get_eligible_models", lambda: [{"model_id": "free-coding-test"}])
     monkeypatch.setattr("src.autonomous_guard.omniroute_is_available_cached", lambda: True)
-    
+
     ok, model, reason, provider_config = get_hermes_execution_handoff("implementation")
     assert ok is True
     assert model == "free-coding-test"
@@ -556,11 +561,11 @@ def test_heavy_task_routes_to_omniroute_when_local_ollama_offline(monkeypatch):
         "src.autonomous_guard.check_resources_for_hermes",
         lambda: (False, "Insufficient memory headroom"),
     )
-    
+
     # Model discovery raises exception (Ollama is down)
     def failing_list_models():
         raise Exception("Connection refused")
-        
+
     monkeypatch.setattr("src.hermes_agent.list_local_models", failing_list_models)
 
     with patch("src.omniroute.requests.get") as mock_get:

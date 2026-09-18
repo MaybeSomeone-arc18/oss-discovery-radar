@@ -14,8 +14,8 @@ def get_target_repositories(limit=20):
         JOIN organizations o ON r.org_slug = o.slug
         JOIN repository_metrics m ON r.name = m.repo_name
         WHERE o.is_verified_github = 1 AND r.archived = 'False'
-        ORDER BY 
-            (o.opportunity_score * 0.5 + m.review_merge_activity_score * 0.5) DESC, 
+        ORDER BY
+            (o.opportunity_score * 0.5 + m.review_merge_activity_score * 0.5) DESC,
             m.prs_merged_recently DESC
         LIMIT ?
         ''', (limit,))
@@ -24,11 +24,11 @@ def get_target_repositories(limit=20):
 def fetch_contributions(limit=20):
     if not GITHUB_TOKEN:
         raise ValueError("GITHUB_TOKEN is not set.")
-    
+
     init_db()
     repos = get_target_repositories(limit)
     print(f"Starting Live Contribution Discovery for top {len(repos)} active repositories...")
-    
+
     headers = {
         "Authorization": f"bearer {GITHUB_TOKEN}",
         "Content-Type": "application/json"
@@ -38,7 +38,7 @@ def fetch_contributions(limit=20):
     for repo_name, org_slug in repos:
         owner, name = repo_name.split('/')
         print(f"Fetching contributions for {repo_name}...")
-        
+
         query = """
         query($owner: String!, $name: String!) {
           repository(owner: $owner, name: $name) {
@@ -88,23 +88,23 @@ def fetch_contributions(limit=20):
           }
         }
         """
-        
+
         variables = {"owner": owner, "name": name}
         response = requests.post(GRAPHQL_API_URL, json={'query': query, 'variables': variables}, headers=headers)
-        
+
         if response.status_code != 200:
             print(f"  [!] HTTP Error for {repo_name}: {response.status_code}")
             continue
-            
+
         data = response.json()
         if 'errors' in data:
             print(f"  [!] GraphQL Error for {repo_name}")
             continue
-            
+
         repo_data = data.get('data', {}).get('repository')
         if not repo_data:
             continue
-            
+
         # Process Issues
         from src.github_client import format_discussion_context
         issues = repo_data.get('issues', {}).get('nodes', [])
@@ -115,10 +115,10 @@ def fetch_contributions(limit=20):
             author = author_data.get('login', 'Unknown')
             author_assoc = author_data.get('association')
             milestone = issue.get('milestone', {}).get('title') if issue.get('milestone') else None
-            
+
             # Extract tags using our classifier
             tags = extract_tags([issue['title'], issue['bodyText'], ", ".join(labels)])
-            
+
             comments_data = issue.get('comments', {}).get('nodes', [])
             discussion_ctx = format_discussion_context(
                 issue.get('bodyText', ''),
@@ -145,7 +145,7 @@ def fetch_contributions(limit=20):
                 classified_tags=tags,
                 discussion_context=discussion_ctx
             )
-            
+
         # Process PRs
         prs = repo_data.get('pullRequests', {}).get('nodes', [])
         for pr in prs:
@@ -153,7 +153,7 @@ def fetch_contributions(limit=20):
             reviews_count = pr.get('reviews', {}).get('totalCount', 0)
             comments_count = pr.get('comments', {}).get('totalCount', 0)
             total_comments = reviews_count + comments_count
-            
+
             save_pull_request(
                 url=pr['url'],
                 pr_number=pr['number'],

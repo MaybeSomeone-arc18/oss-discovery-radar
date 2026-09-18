@@ -19,7 +19,7 @@ def test_save_organization_idempotent():
     stats = database.get_stats()
     assert stats['organizations'] == 1
     assert stats['years'] == 1
-    
+
     # Insert again (idempotent)
     database.save_organization("test-org", "Test Organization Updated", "https://test.org", 2024)
     stats = database.get_stats()
@@ -44,11 +44,11 @@ def test_save_issue():
         assignee_status="UNASSIGNED",
         milestone=None
     )
-    
+
     stats = database.get_stats()
     assert stats['repositories'] == 1
     assert stats['issues'] == 1
-    
+
     # Duplicate insert should not increase count
     database.save_issue(
         url="https://github.com/test/repo/issues/1",
@@ -66,7 +66,7 @@ def test_save_issue():
         assignee_status="UNASSIGNED",
         milestone=None
     )
-    
+
     stats = database.get_stats()
     assert stats['issues'] == 1
 

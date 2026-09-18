@@ -9,7 +9,7 @@ def get_github_token():
     token = os.getenv("GITHUB_TOKEN")
     if token:
         return token
-    
+
     # Fallback to GitHub CLI
     try:
         result = subprocess.run(["gh", "auth", "token"], capture_output=True, text=True, check=True)
