@@ -71,7 +71,7 @@ def create_patch(worktree_path, output_path):
         # Capture tracked files (staged and unstaged) without mutating index
         proc = subprocess.run(["git", "diff", "HEAD"], cwd=str(worktree_path), capture_output=True, text=True, check=True)
         diff_text = proc.stdout
-        
+
         # Manually append untracked files
         proc_untracked = subprocess.run(["git", "ls-files", "--others", "--exclude-standard"], cwd=str(worktree_path), capture_output=True, text=True, check=True)
         for f in proc_untracked.stdout.strip().split('\n'):
@@ -258,19 +258,23 @@ def implement(issue_id_or_url):
         )
         return False, None, ""
 
-    worktree_path = create_worktree(org, repo, issue_id)
     transition_status(issue["url"], "IN_PROGRESS")
-    print(f"Isolated worktree ready at {worktree_path}.")
 
-    # Record base commit
+    # Create a temporary worktree just to get the base commit
+    temp_worktree = create_worktree(org, repo, issue_id, branch_name=f"issue-{issue_id}-base")
     try:
-        base_commit_proc = subprocess.run(["git", "rev-parse", "HEAD"], cwd=str(worktree_path), capture_output=True, text=True, check=True)
+        base_commit_proc = subprocess.run(["git", "rev-parse", "HEAD"], cwd=str(temp_worktree), capture_output=True, text=True, check=True)
         base_commit = base_commit_proc.stdout.strip()
         print(f"Base commit recorded: {base_commit}")
         with open(reports_dir / "base_commit.txt", "w") as f:
             f.write(base_commit)
     except subprocess.CalledProcessError as e:
         print(f"Failed to record base commit: {e}")
+    finally:
+        from src.workspace_manager import cleanup_worktree, get_base_repo_path
+        cleanup_worktree(org, repo, issue_id)
+        # Delete the temp branch
+        subprocess.run(["git", "branch", "-D", f"issue-{issue_id}-base"], cwd=str(get_base_repo_path(org, repo)), capture_output=True)
 
     # Hide GitHub credentials
     original_environ = os.environ.copy()
@@ -279,7 +283,33 @@ def implement(issue_id_or_url):
     if 'GH_TOKEN' in os.environ:
         del os.environ['GH_TOKEN']
 
-    context = f"Issue Title: {issue['title']}\nBody: {issue['body_preview']}\n\nPLAN:\n{plan_content}"
+    def extract_section(text, header):
+        import re
+        match = re.search(rf"{header}:?\s*(.*?)(?=(?:^[A-Z\s]+:|\Z))", text, re.DOTALL | re.MULTILINE)
+        return match.group(1).strip() if match else "None specified"
+
+    target_files = extract_section(plan_content, "TARGET FILES")
+    target_symbol = extract_section(plan_content, "TARGET SYMBOL")
+    acceptance_criteria = extract_section(plan_content, "ACCEPTANCE CRITERIA")
+    targeted_test = extract_section(plan_content, "TARGETED TEST")
+
+    context = f"""Issue Title: {issue['title']}
+Body: {issue['body_preview']}
+
+TARGET FILES:
+{target_files}
+
+TARGET SYMBOL:
+{target_symbol}
+
+ACCEPTANCE CRITERIA:
+{acceptance_criteria}
+
+TARGETED TEST:
+{targeted_test}
+
+PLAN:
+{plan_content}"""
 
     from src.implementation_models import get_eligible_models, record_failure, record_success
     from src.omniroute import get_omniroute_hermes_provider_config
@@ -296,10 +326,44 @@ def implement(issue_id_or_url):
     test_results = None
     diff_stat = ""
 
+    from src.workspace_manager import cleanup_worktree, get_base_repo_path
+
+    def prepare_clean_worktree(attempt_suffix):
+        cleanup_worktree(org, repo, issue_id)
+        base_repo = get_base_repo_path(org, repo)
+        branch = f"issue-{issue_id}-{attempt_suffix}"
+        subprocess.run(["git", "branch", "-D", branch], cwd=str(base_repo), capture_output=True)
+        wt = create_worktree(org, repo, issue_id, branch_name=branch)
+        print(f"Isolated worktree ready at {wt} on branch {branch}.")
+        return wt
+
+    def preserve_patch(wt_path, r_dir, attempt_suffix, raw_response, fail_class):
+        try:
+            diff_proc = subprocess.run(["git", "diff", "HEAD"], cwd=str(wt_path), capture_output=True, text=True)
+            diff_stat_proc = subprocess.run(["git", "diff", "HEAD", "--stat"], cwd=str(wt_path), capture_output=True, text=True)
+            diff_name_proc = subprocess.run(["git", "diff", "HEAD", "--name-only"], cwd=str(wt_path), capture_output=True, text=True)
+
+            patch_file = r_dir / f"{attempt_suffix}.patch"
+            with open(patch_file, "w") as pf:
+                pf.write(diff_proc.stdout)
+
+            info_file = r_dir / f"{attempt_suffix}_info.txt"
+            with open(info_file, "w") as inf:
+                inf.write(f"Failure Classification: {fail_class}\n")
+                inf.write(f"Raw Response:\n{raw_response}\n\n")
+                inf.write(f"Changed Files:\n{diff_name_proc.stdout}\n")
+                inf.write(f"Diff Stat:\n{diff_stat_proc.stdout}\n")
+
+            print(f"Preserved patch and attempt info to {patch_file}")
+            return patch_file
+        except Exception as e:
+            print(f"Failed to preserve patch: {e}")
+            return None
+
     for attempt, m_entry in enumerate(eligible_models[:max_model_attempts]):
         selected_model = m_entry["model_id"]
         print(f"\n--- [Attempt {attempt+1}/{max_model_attempts}] Implementing with model: {selected_model} ---")
-        
+
         execution_provider = get_omniroute_hermes_provider_config()
         if execution_provider:
             execution_provider["model"] = selected_model
@@ -307,11 +371,9 @@ def implement(issue_id_or_url):
         # Pre-Inference Provider Health Gate
         print(f"Running pre-inference health gate for {selected_model}...")
         try:
-            gate_kwargs = {"cwd": str(worktree_path), "safe_mode": True, "model": selected_model}
+            gate_kwargs = {"safe_mode": True, "model": selected_model}
             if execution_provider:
                 gate_kwargs.update(_oneshot_provider_kwargs(execution_provider))
-            
-            # Tiny prompt to test API connectivity without burning massive context
             run_hermes_oneshot("Respond with exactly 'OK'.", timeout=15, **gate_kwargs)
             print(f"Pre-inference health gate passed for {selected_model}.")
         except Exception as gate_e:
@@ -331,10 +393,12 @@ def implement(issue_id_or_url):
             "plan_size": len(plan_content),
             "issue_body_size": len(issue.get('body_preview') or ''),
             "discussion_context_size": len(issue.get('discussion_context') or ''),
-            "repo_context_size": 0, # Difficult to separate out here
+            "repo_context_size": 0,
         }
 
         repaired = False
+        worktree_path = prepare_clean_worktree(f"attempt-{attempt}")
+
         try:
             implement_issue_with_hermes(
                 worktree_path,
@@ -348,17 +412,36 @@ def implement(issue_id_or_url):
             from src.hermes_agent import _classify_hermes_failure
             error_str = str(e)
             print(f"Implementation error with {selected_model}: {e}")
-            
             failure_category = _classify_hermes_failure(error_str)
-            
+
+            patch_file = preserve_patch(worktree_path, reports_dir, f"attempt-{attempt}-impl-error", error_str, failure_category)
+
             if failure_category.startswith("PROVIDER_"):
                 print(f"Provider health issue detected for {selected_model} during execution: {failure_category}. Selecting next model...")
                 record_failure(selected_model, failure_category)
+                cleanup_worktree(org, repo, issue_id)
                 continue
-            
+
             if failure_category == "IMPLEMENTATION_FAILURE":
-                print(f"Implementation quality failure (e.g. no diff). Triggering bounded repair for {selected_model}...")
+                print(f"Implementation quality failure (e.g. no diff). Triggering bounded repair for {selected_model} on a CLEAN worktree...")
                 repaired = True
+                worktree_path = prepare_clean_worktree(f"attempt-{attempt}-repair")
+
+                apply_ok = False
+                if patch_file and patch_file.exists():
+                    apply_proc = subprocess.run(["git", "apply", str(patch_file)], cwd=str(worktree_path), capture_output=True, text=True)
+                    if apply_proc.returncode == 0:
+                        apply_ok = True
+                    else:
+                        print(f"Failed to apply patch: {apply_proc.stderr}")
+
+                if not apply_ok:
+                    print("Repair infrastructure failed (patch apply). Skipping repair.")
+                    preserve_patch(worktree_path, reports_dir, f"attempt-{attempt}-repair-infra-fail", apply_proc.stderr if patch_file else "No patch file", "repair_infrastructure_failed")
+                    record_failure(selected_model, "repair_infrastructure_failed")
+                    cleanup_worktree(org, repo, issue_id)
+                    continue
+
                 try:
                     repair_issue_with_hermes(
                         worktree_path,
@@ -370,50 +453,86 @@ def implement(issue_id_or_url):
                     print("Repair attempt finished.")
                 except Exception as repair_e:
                     print(f"Repair attempt failed for {selected_model}: {repair_e}")
+                    preserve_patch(worktree_path, reports_dir, f"attempt-{attempt}-repair-fail", str(repair_e), "implementation_repair_failed")
                     record_failure(selected_model, "implementation_repair_failed")
+                    cleanup_worktree(org, repo, issue_id)
                     continue
             else:
                 print(f"Unknown error encountered with {selected_model}: {failure_category}. Preserving evidence and safely stopping current model.")
                 record_failure(selected_model, failure_category)
+                cleanup_worktree(org, repo, issue_id)
                 continue
-                
+
         passed_guardrails, guardrail_msg = check_diff_guardrails(worktree_path)
         if not passed_guardrails:
             print(f"Validation FAILED: {guardrail_msg}")
+            patch_file = preserve_patch(worktree_path, reports_dir, f"attempt-{attempt}-guardrail-fail", guardrail_msg, "guardrail_failed")
+
             if repaired:
                 print("Already repaired once, giving up on this model.")
                 record_failure(selected_model, "guardrail_failed")
+                cleanup_worktree(org, repo, issue_id)
                 continue
-                
-            print("Triggering repair for guardrail failure...")
+
+            print(f"Triggering repair for guardrail failure on a CLEAN worktree...")
             repaired = True
+            worktree_path = prepare_clean_worktree(f"attempt-{attempt}-repair")
+
+            apply_ok = False
+            if patch_file and patch_file.exists():
+                apply_proc = subprocess.run(["git", "apply", str(patch_file)], cwd=str(worktree_path), capture_output=True, text=True)
+                if apply_proc.returncode == 0:
+                    apply_ok = True
+                else:
+                    print(f"Failed to apply patch: {apply_proc.stderr}")
+
+            if not apply_ok:
+                print("Repair infrastructure failed (patch apply). Skipping repair.")
+                preserve_patch(worktree_path, reports_dir, f"attempt-{attempt}-repair-infra-fail", apply_proc.stderr if patch_file else "No patch file", "repair_infrastructure_failed")
+                record_failure(selected_model, "repair_infrastructure_failed")
+                cleanup_worktree(org, repo, issue_id)
+                continue
+
             try:
                 repair_issue_with_hermes(
                     worktree_path,
                     context,
-                    f"Guardrail failure: {guardrail_msg}",
+                    f"Guardrail failure on previous attempt: {guardrail_msg}",
                     model=selected_model,
                     provider_config=execution_provider,
                 )
             except Exception as repair_e:
                 print(f"Repair attempt failed for {selected_model}: {repair_e}")
+                preserve_patch(worktree_path, reports_dir, f"attempt-{attempt}-repair-fail2", str(repair_e), "guardrail_repair_failed")
                 record_failure(selected_model, "guardrail_repair_failed")
+                cleanup_worktree(org, repo, issue_id)
                 continue
 
             passed_guardrails, guardrail_msg = check_diff_guardrails(worktree_path)
             if not passed_guardrails:
                 print(f"Validation FAILED after repair: {guardrail_msg}")
+                preserve_patch(worktree_path, reports_dir, f"attempt-{attempt}-guardrail-fail3", guardrail_msg, "guardrail_failed")
                 record_failure(selected_model, "guardrail_failed")
+                cleanup_worktree(org, repo, issue_id)
                 continue
 
         print("Guardrails passed. Running tests...")
 
-        test_results = discover_and_run_tests(worktree_path)
+        test_results = discover_and_run_tests(worktree_path, targeted_test=targeted_test if targeted_test and targeted_test != "None specified" else None)
         all_passed = True
         for t in test_results:
             if not t["result"]["success"]:
                 all_passed = False
                 break
+
+        if all_passed and targeted_test and targeted_test != "None specified":
+            print("Targeted tests passed. Running full suite...")
+            full_results = discover_and_run_tests(worktree_path)
+            test_results.extend(full_results)
+            for t in full_results:
+                if not t["result"]["success"]:
+                    all_passed = False
+                    break
 
         if all_passed:
             print("All detected tests passed!")
@@ -421,44 +540,87 @@ def implement(issue_id_or_url):
             success = True
             break
 
-        if is_environment_failure(test_results):
-            print("Validation blocked by environment/toolchain failure. Skipping Hermes repair.")
-            record_failure(selected_model, "env_failure")
-            continue
-            
-        if repaired:
-            print("Tests failed, but we already used our one repair attempt.")
-            record_failure(selected_model, "test_failure_post_repair")
+        is_timeout = any("command timed out" in (t.get("result", {}).get("stderr") or "").lower() for t in test_results)
+        if is_timeout:
+            print("Validation blocked by test timeout. Skipping Hermes repair.")
+            preserve_patch(worktree_path, reports_dir, f"attempt-{attempt}-timeout", "Test timeout", "TEST_TIMEOUT")
+            record_failure(selected_model, "TEST_TIMEOUT")
+            cleanup_worktree(org, repo, issue_id)
             continue
 
-        print("Tests failed. Triggering repair loop...")
+        if is_environment_failure(test_results):
+            print("Validation blocked by environment/toolchain failure. Skipping Hermes repair.")
+            preserve_patch(worktree_path, reports_dir, f"attempt-{attempt}-env-fail", "Environment failure", "env_failure")
+            record_failure(selected_model, "env_failure")
+            cleanup_worktree(org, repo, issue_id)
+            continue
+
+        if repaired:
+            print("Tests failed, but we already used our one repair attempt.")
+            preserve_patch(worktree_path, reports_dir, f"attempt-{attempt}-test-fail", "Test failure", "tests_failed")
+            record_failure(selected_model, "tests_failed")
+            cleanup_worktree(org, repo, issue_id)
+            continue
+
+        print("Tests failed. Triggering repair on a CLEAN worktree with patch replay...")
         repaired = True
-        failure_logs = json.dumps(test_results, indent=2)
+        patch_file = preserve_patch(worktree_path, reports_dir, f"attempt-{attempt}-tests-failed", "Test failure", "tests_failed")
+
+        fail_output = ""
+        for t in test_results:
+            if not t["result"]["success"]:
+                fail_output += f"--- {t['framework']} ---\nSTDOUT:\n{t['result'].get('stdout','')}STDERR:\n{t['result'].get('stderr','')}\n"
+
+        worktree_path = prepare_clean_worktree(f"attempt-{attempt}-repair")
+
+        apply_ok = False
+        if patch_file and patch_file.exists():
+            apply_proc = subprocess.run(["git", "apply", str(patch_file)], cwd=str(worktree_path), capture_output=True, text=True)
+            if apply_proc.returncode == 0:
+                apply_ok = True
+                print("Candidate patch applied successfully to repair worktree.")
+            else:
+                print(f"Failed to apply patch to repair worktree: {apply_proc.stderr}")
+
+        if not apply_ok:
+            print("Repair infrastructure failed (patch apply). Skipping repair.")
+            preserve_patch(worktree_path, reports_dir, f"attempt-{attempt}-repair-infra-fail", apply_proc.stderr if patch_file else "No patch file", "repair_infrastructure_failed")
+            record_failure(selected_model, "repair_infrastructure_failed")
+            cleanup_worktree(org, repo, issue_id)
+            continue
+
+        repair_msg = f"Tests failed on candidate patch.\n\nFAILING TEST OUTPUT:\n{fail_output}\n\nEXACT REPAIR GOAL:\nFix the implementation to pass the targeted tests."
+
         try:
             repair_issue_with_hermes(
                 worktree_path,
                 context,
-                failure_logs,
+                repair_msg,
                 model=selected_model,
                 provider_config=execution_provider,
             )
-        except Exception as e:
-            print(f"Repair error: {e}")
+        except Exception as repair_e:
+            print(f"Repair attempt failed for {selected_model}: {repair_e}")
+            preserve_patch(worktree_path, reports_dir, f"attempt-{attempt}-test-repair-fail", str(repair_e), "test_repair_failed")
             record_failure(selected_model, "test_repair_failed")
+            cleanup_worktree(org, repo, issue_id)
             continue
 
-        passed_guardrails, guardrail_msg = check_diff_guardrails(worktree_path)
-        if not passed_guardrails:
-            print(f"Validation FAILED after repair: {guardrail_msg}")
-            record_failure(selected_model, "guardrail_failed_post_test")
-            continue
-
-        test_results = discover_and_run_tests(worktree_path)
+        test_results = discover_and_run_tests(worktree_path, targeted_test=targeted_test if targeted_test and targeted_test != "None specified" else None)
         all_passed = True
         for t in test_results:
             if not t["result"]["success"]:
                 all_passed = False
                 break
+
+        if all_passed and targeted_test and targeted_test != "None specified":
+            print("Targeted tests passed. Running full suite...")
+            full_results = discover_and_run_tests(worktree_path)
+            test_results.extend(full_results)
+            for t in full_results:
+                if not t["result"]["success"]:
+                    all_passed = False
+                    break
 
         if all_passed:
             print("All detected tests passed after repair!")
@@ -467,15 +629,16 @@ def implement(issue_id_or_url):
             break
         else:
             print("Tests still failing after repair.")
-            record_failure(selected_model, "test_failure")
+            preserve_patch(worktree_path, reports_dir, f"attempt-{attempt}-test-fail-final", "Test failure after repair", "tests_failed")
+            record_failure(selected_model, "tests_failed")
+            cleanup_worktree(org, repo, issue_id)
             continue
-            
     if not success:
         print("All viable implementation models exhausted or failed.")
         transition_status(issue["url"], "IMPLEMENTATION_FAILED")
         os.environ.update(original_environ)
         return False, None, ""
-        
+
     print("Generating reports and patch...")
     patch_file = reports_dir / "patch.diff"
     create_patch(worktree_path, patch_file)
