@@ -205,7 +205,9 @@ def validate_autonomous_run_by_url(issue_url: str):
     return True, "Autonomous run validated."
 
 def validate_hermes_execution():
-    ok, _model, reason = get_hermes_execution_plan()
+    # Use "heavy" so OmniRoute is probed; remote execution doesn't require
+    # local memory headroom, so this gives a valid pass when OmniRoute is up.
+    ok, _model, reason = get_hermes_execution_plan(task_type="heavy")
     return ok, reason
 
 

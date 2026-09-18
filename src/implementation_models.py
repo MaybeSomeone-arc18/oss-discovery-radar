@@ -114,18 +114,41 @@ INITIAL_MODELS = [
 ]
 
 def load_registry():
+    import copy
+
+    # Deepcopy to ensure we don't accidentally mutate the module-level constant
+    canonical_models = copy.deepcopy(INITIAL_MODELS)
+
     if not REGISTRY_PATH.exists():
         os.makedirs(REGISTRY_PATH.parent, exist_ok=True)
         with open(REGISTRY_PATH, "w") as f:
-            json.dump(INITIAL_MODELS, f, indent=2)
-        return INITIAL_MODELS
-    
+            json.dump(canonical_models, f, indent=2)
+        return canonical_models
+
     try:
         with open(REGISTRY_PATH, "r") as f:
-            data = json.load(f)
-            return data
+            runtime_state = json.load(f)
+
+        if not isinstance(runtime_state, list):
+            return canonical_models
+
+        # Create a fast lookup for runtime state
+        runtime_map = {m["model_id"]: m for m in runtime_state if isinstance(m, dict) and "model_id" in m}
+
+        # Merge mutable state onto canonical models
+        for cm in canonical_models:
+            if cm["model_id"] in runtime_map:
+                rm = runtime_map[cm["model_id"]]
+                cm["cooldown_until"] = rm.get("cooldown_until", 0)
+                cm["failure_count"] = rm.get("failure_count", 0)
+                cm["last_failure_type"] = rm.get("last_failure_type")
+                cm["last_success"] = rm.get("last_success", cm.get("last_success"))
+                cm["availability_status"] = rm.get("availability_status", "AVAILABLE")
+                cm["last_probe"] = rm.get("last_probe", cm.get("last_probe"))
+
+        return canonical_models
     except (json.JSONDecodeError, FileNotFoundError):
-        return INITIAL_MODELS
+        return canonical_models
 
 def save_registry(data):
     os.makedirs(REGISTRY_PATH.parent, exist_ok=True)
@@ -135,7 +158,7 @@ def save_registry(data):
 def get_eligible_models():
     data = load_registry()
     now = time.time()
-    
+
     eligible = []
     for m in data:
         if not m.get("free_only"):
@@ -146,9 +169,9 @@ def get_eligible_models():
             continue
         if m.get("availability_status") == "DISABLED":
             continue
-        
+
         eligible.append(m)
-        
+
     def is_concrete(model_entry):
         return not model_entry["model_id"].startswith("auto/")
 
@@ -159,13 +182,13 @@ def get_eligible_models():
 def record_failure(model_id, error_type):
     data = load_registry()
     now = time.time()
-    
+
     for m in data:
         if m["model_id"] == model_id:
             m["failure_count"] = m.get("failure_count", 0) + 1
             m["last_failure_type"] = error_type
             m["last_probe"] = now
-            
+
             if error_type == "PROVIDER_RATE_LIMIT":
                 m["cooldown_until"] = now + 300  # 5 minutes
                 m["availability_status"] = "COOLDOWN"
@@ -182,16 +205,16 @@ def record_failure(model_id, error_type):
                 m["cooldown_until"] = now + 300
                 m["availability_status"] = "IMPLEMENTATION_ERROR" if error_type == "IMPLEMENTATION_FAILURE" else "ERROR"
             else:
-                m["cooldown_until"] = now + 300 
+                m["cooldown_until"] = now + 300
                 m["availability_status"] = "IMPLEMENTATION_ERROR"
             break
-            
+
     save_registry(data)
 
 def record_success(model_id):
     data = load_registry()
     now = time.time()
-    
+
     for m in data:
         if m["model_id"] == model_id:
             m["failure_count"] = 0
@@ -200,5 +223,5 @@ def record_success(model_id):
             m["last_success"] = now
             m["last_probe"] = now
             break
-            
+
     save_registry(data)

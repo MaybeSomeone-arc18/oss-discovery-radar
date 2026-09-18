@@ -153,7 +153,7 @@ def run_autonomous_by_url(issue_url: str, *, regenerate_communication=True) -> P
         print(f"Autonomous retry skipped/deferred: {validation_reason}")
         return None
 
-    execution_ok, selected_model, execution_reason = get_hermes_execution_plan()
+    execution_ok, selected_model, execution_reason = get_hermes_execution_plan(task_type="heavy")
     if not execution_ok:
         log_event(
             "autonomous_retry",
