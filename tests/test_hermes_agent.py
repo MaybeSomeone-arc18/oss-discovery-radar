@@ -1,3 +1,4 @@
+valid_plan = 'TARGET FILES:\nsrc/main.py\nTARGET SYMBOL:\nn/a\nACCEPTANCE CRITERIA:\nworks well\nTARGETED TEST:\npytest test.py'
 import pytest
 import os
 import subprocess
@@ -118,7 +119,7 @@ def test_run_hermes_oneshot_success():
     mock_result = MagicMock()
     mock_result.returncode = 0
     mock_result.stdout = "Expected Output"
-    
+
     with patch("subprocess.run", return_value=mock_result) as mock_run:
         result = run_hermes_oneshot("prompt text")
         assert result == "Expected Output"
@@ -368,7 +369,7 @@ def test_research_command(mock_run, mock_analysis, mock_context, tmp_path):
             result = research(123)
             assert result is True
             assert mock_run.call_count == 2 # 1 gate + 1 real
-            
+
             gate_call = mock_run.call_args_list[0]
             assert "Respond with exactly 'OK'." in gate_call.args[0]
             assert gate_call.kwargs["model"] == "opencode-zen/nemotron-3.5-lightning-free"
@@ -396,7 +397,7 @@ def test_research_fallback_when_remote_unavailable(mock_verify, mock_context, mo
         "opportunity_score": 85.0
     }
     mock_analysis.return_value = {}
-    
+
     with patch("src.hermes_agent.get_reports_dir", return_value=tmp_path):
         with patch("src.hermes_agent.run_hermes_oneshot") as mock_run:
             def fake_run(prompt, **kwargs):
@@ -408,7 +409,7 @@ def test_research_fallback_when_remote_unavailable(mock_verify, mock_context, mo
             result = research(123)
             assert result is True
             assert mock_run.call_count == 2
-            
+
             gate_call = mock_run.call_args_list[0]
             assert gate_call.kwargs["model"] == "opencode-zen/nemotron-3.5-lightning-free"
 
@@ -455,13 +456,13 @@ def test_plan_passes_selected_model_to_hermes(monkeypatch, tmp_path):
 
     def fake_run(prompt, **kwargs):
         captured.update(kwargs)
-        return "[FACT] Plan"
+        return "TARGET FILES:\nsrc/main.py\nTARGET SYMBOL:\nn/a\nACCEPTANCE CRITERIA:\nworks well\nTARGETED TEST:\npytest test.py"
 
     monkeypatch.setattr("src.hermes_agent.run_hermes_oneshot", fake_run)
 
     assert plan(123) is True
     assert captured["model"] == "opencode-zen/nemotron-3.5-lightning-free"
-    assert (tmp_path / "plan.md").read_text() == "[FACT] Plan"
+    assert (tmp_path / "plan.md").read_text() == "TARGET FILES:\nsrc/main.py\nTARGET SYMBOL:\nn/a\nACCEPTANCE CRITERIA:\nworks well\nTARGETED TEST:\npytest test.py"
     # Planning is reasoning-heavy: it always requests the heavy (OmniRoute) route.
     assert plan_calls == ["heavy"]
 
@@ -720,17 +721,17 @@ def test_implement_issue_with_hermes_preserves_raw_response_on_empty_diff(monkey
 
     class FakeCompletedProcess:
         stdout = ""
-    
+
     def fake_run(cmd, *args, **kwargs):
         if cmd[:2] == ["git", "status"]:
             return FakeCompletedProcess()
         return subprocess.CompletedProcess(args=cmd, returncode=0, stdout="")
-    
+
     monkeypatch.setattr("subprocess.run", fake_run)
 
     with pytest.raises(RuntimeError) as exc_info:
         implement_issue_with_hermes(tmp_path, "context")
-    
+
     err_msg = str(exc_info.value)
     assert "Implementation agent returned successfully but no files were modified" in err_msg
     assert "--- RAW RESPONSE ---" in err_msg
@@ -753,7 +754,7 @@ def test_implement_issue_with_hermes_prompt_contains_strict_tool_constraints(mon
     monkeypatch.setattr("subprocess.run", lambda *a, **k: FakeCompletedProcess())
 
     implement_issue_with_hermes(tmp_path, "context")
-    
+
     prompt = captured_prompt[0]
     assert "directly create and edit files" in prompt
     assert "MUST NOT return a patch, code block, explanation" in prompt
@@ -777,3 +778,109 @@ def test_classify_hermes_failure_structured_categories():
     assert _classify_hermes_failure("subprocess.TimeoutExpired: Command 'hermes' timed out after 900 seconds") == "PROVIDER_TIMEOUT"
     assert _classify_hermes_failure("Hermes CLI timed out after 900 seconds. Model execution might be stuck or too slow.") == "PROVIDER_TIMEOUT"
     assert _classify_hermes_failure("some weird obscure error") == "UNKNOWN"
+
+
+def test_plan_semantic_validation_rejects_empty_or_generic():
+    from src.hermes_agent import _validate_plan_structure
+    import pytest
+
+    bad_plans = [
+        "TARGET FILES:\nTARGET SYMBOL:\nACCEPTANCE CRITERIA:\nTARGETED TEST:\nSome plan",
+        "TARGET FILES:\nnone\nTARGET SYMBOL:\nvalid\nACCEPTANCE CRITERIA:\nvalid\nTARGETED TEST:\nvalid",
+        "TARGET FILES:\nvalid\nTARGET SYMBOL:\nvalid\nACCEPTANCE CRITERIA:\nvalid\nTARGETED TEST:\nrun tests",
+    ]
+
+    for bp in bad_plans:
+        with pytest.raises(ValueError):
+            _validate_plan_structure(bp)
+
+    good_plan = "TARGET FILES:\nsrc/main.py\nTARGET SYMBOL:\nn/a\nACCEPTANCE CRITERIA:\nworks well\nTARGETED TEST:\npytest test.py"
+    _validate_plan_structure(good_plan) # Should not raise
+
+def test_plan_semantic_validation_targeted_test_extraction():
+    from src.hermes_agent import _validate_plan_structure
+    import pytest
+
+    valid_plan = """TARGET FILES:
+src/main.py
+TARGET SYMBOL:
+n/a
+ACCEPTANCE CRITERIA:
+works well
+TARGETED TEST:
+pytest test.py
+### Implementation steps
+1. do this
+2. do that
+"""
+    # This should not raise, meaning TARGETED TEST correctly extracted `pytest test.py` without the ### Implementation steps
+    _validate_plan_structure(valid_plan)
+
+    invalid_plan_prose_1 = """TARGET FILES:
+src/main.py
+TARGET SYMBOL:
+n/a
+ACCEPTANCE CRITERIA:
+works well
+TARGETED TEST:
+Perform `./mvnw test -Dtest=YourTestClass` where `YourTestClass` is a newly converted test class.
+### Implementation steps
+"""
+    with pytest.raises(ValueError, match="raw shell command, but starts with conversational prose"):
+        _validate_plan_structure(invalid_plan_prose_1)
+
+    invalid_plan_prose_2 = """TARGET FILES:
+src/main.py
+TARGET SYMBOL:
+n/a
+ACCEPTANCE CRITERIA:
+works well
+TARGETED TEST:
+run `mvn test` to check
+"""
+    with pytest.raises(ValueError, match="starts with conversational prose"):
+        _validate_plan_structure(invalid_plan_prose_2)
+
+    invalid_plan_multiline = """TARGET FILES:
+src/main.py
+TARGET SYMBOL:
+n/a
+ACCEPTANCE CRITERIA:
+works well
+TARGETED TEST:
+./mvnw test
+echo "done"
+"""
+    with pytest.raises(ValueError, match="multiple lines"):
+        _validate_plan_structure(invalid_plan_multiline)
+
+    invalid_plan_backticks = """TARGET FILES:
+src/main.py
+TARGET SYMBOL:
+n/a
+ACCEPTANCE CRITERIA:
+works well
+TARGETED TEST:
+`./mvnw test`
+"""
+    with pytest.raises(ValueError, match="markdown backticks"):
+        _validate_plan_structure(invalid_plan_backticks)
+
+    good_commands = [
+        "./mvnw test",
+        "mvn test",
+        "./gradlew test",
+        "gradle test",
+        "pytest test.py",
+        "python -m pytest",
+        "npm test",
+        "pnpm test",
+        "yarn test",
+        "cargo test",
+        "go test ./...",
+        "make test",
+    ]
+
+    for cmd in good_commands:
+        good_plan = f"TARGET FILES:\nvalid\nTARGET SYMBOL:\nvalid\nACCEPTANCE CRITERIA:\nvalid\nTARGETED TEST:\n{cmd}\n### Risks\nnone"
+        _validate_plan_structure(good_plan)

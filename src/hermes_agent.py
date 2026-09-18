@@ -1,3 +1,64 @@
+def _validate_plan_structure(plan_text):
+
+    if plan_text.strip().startswith("```"):
+        plines = plan_text.strip().splitlines()
+        if plines[0].startswith("```"):
+            plines = plines[1:]
+        if plines and plines[-1].startswith("```"):
+            plines = plines[:-1]
+        plan_text = "\n".join(plines).strip()
+    import re
+    required_headers = ["TARGET FILES", "TARGET SYMBOL", "ACCEPTANCE CRITERIA", "TARGETED TEST"]
+
+    known_headers = ["TARGET FILES", "TARGET SYMBOL", "ACCEPTANCE CRITERIA", "TARGETED TEST", "IMPLEMENTATION STEPS", "RISKS", "OPEN QUESTIONS", "GOAL", "UNDERSTANDING", "PLAN"]
+    headers_regex = "|".join(rf"^(?:#+\s+)?\**{h}s?\**[*:?]*" for h in known_headers)
+    lookahead = rf"(?:^#+\s+|{headers_regex}|\Z)"
+    
+    def check_exists(text, req):
+        # Match on the first significant word(s) to tolerate minor typos like
+        # "CRITERA" vs "CRITERIA"; require at least the first two words to match.
+        first_words = req.split()[:2]
+        pattern = r"\s+".join(rf"(?:{w}\w*)" for w in first_words)
+        return bool(re.search(rf"^(?:#+\s+)?\**{pattern}", text, re.IGNORECASE | re.MULTILINE))
+
+    missing = [req for req in required_headers if not check_exists(plan_text, req)]
+    if missing:
+        raise ValueError(f"Plan is missing required explicit sections: {', '.join(missing)}")
+
+    # Check semantic meaning (non-empty and not generic placeholders)
+    def extract_section(text, header):
+        # Use same fuzzy first-two-words pattern as check_exists
+        first_words = header.split()[:2]
+        pattern = r"\s+".join(rf"(?:{w}\w*)" for w in first_words)
+        match = re.search(rf"^(?:#+\s+)?\**{pattern}\S*\s*(.*?)(?={lookahead})", text, re.DOTALL | re.MULTILINE | re.IGNORECASE)
+        return match.group(1).strip() if match else ""
+
+    for header in required_headers:
+        val = extract_section(plan_text, header)
+        if not val or val.lower() in ["none", "n/a", "unknown", "test/*", "run tests", "verify it works"]:
+            if header == "TARGET SYMBOL" and val.lower() in ["n/a", "none"]:
+                continue # Target symbol might not be applicable
+            raise ValueError(f"Plan section {header} contains insufficient or generic content: '{val}'")
+
+        if header == "TARGETED TEST":
+            # Strip any trailing code-fence lines the model might have appended
+            stripped_val = "\n".join(
+                ln for ln in val.splitlines() if not ln.strip().startswith("```")
+            ).strip()
+            if "\n" in stripped_val:
+                raise ValueError(f"TARGETED TEST must be a single executable command line, but found multiple lines:\n{stripped_val}")
+            val = stripped_val  # use cleaned value for further checks
+
+            val_lower = val.lower()
+            if any(val_lower.startswith(w) for w in ["perform", "run", "execute", "use", "test "]):
+                raise ValueError(f"TARGETED TEST must be a raw shell command, but starts with conversational prose: '{val}'")
+
+            if "```" in val or "`" in val:
+                raise ValueError(f"TARGETED TEST must be a raw shell command without markdown backticks: '{val}'")
+
+            if val.startswith("#"):
+                raise ValueError(f"TARGETED TEST cannot be a markdown heading: '{val}'")
+
 import os
 import json
 import shutil
@@ -152,12 +213,12 @@ def _prepare_hermes_child_env():
 
     child_env = os.environ.copy()
     child_env["HERMES_HOME"] = str(runtime_home)
-    
+
     # Isolate temporary files to the runtime directory so sandbox-exec allows them
     runtime_tmp = runtime_home / "tmp"
     runtime_tmp.mkdir(parents=True, exist_ok=True)
     child_env["TMPDIR"] = str(runtime_tmp)
-    
+
     return child_env
 
 def _inject_provider_entry(runtime_home, *, provider_id, model, base_url, api_key_env):
@@ -466,7 +527,7 @@ Known AI Policy Constraints: No AI-generated code push without human review.
             gate_kwargs = {"safe_mode": True, "model": selected_model}
             if provider_config:
                 gate_kwargs.update(_oneshot_provider_kwargs(provider_config))
-            run_hermes_oneshot("Respond with exactly 'OK'.", timeout=15, **gate_kwargs)
+            run_hermes_oneshot("Respond with exactly 'OK'.", timeout=60, **gate_kwargs)
         except Exception as gate_e:
             print(f"Research provider health check failed for {selected_model}: {gate_e}")
             print("Falling back to local safe research model (llama3.2:3b).")
@@ -521,6 +582,19 @@ def plan(issue_id_or_url):
                 issue_id=issue_id_or_url if isinstance(issue_id_or_url, int) else None,
             )
             return False
+
+        print(f"Running pre-inference health gate for plan model {selected_model}...")
+        try:
+            gate_kwargs = {"safe_mode": True, "model": selected_model}
+            if provider_config:
+                gate_kwargs.update(_oneshot_provider_kwargs(provider_config))
+            run_hermes_oneshot("Respond with exactly 'OK'.", timeout=60, **gate_kwargs)
+            print(f"Pre-inference health gate passed for {selected_model}.")
+        except Exception as gate_e:
+            print(f"Plan provider health check failed for {selected_model}: {gate_e}")
+            print("Falling back to local safe planning model (llama3.2:3b).")
+            selected_model = "llama3.2:3b"
+            provider_config = None
     except Exception as e:
         print(f"Plan failed: {e}")
         log_event(
@@ -543,33 +617,63 @@ def plan(issue_id_or_url):
         log_event("hermes_plan", "failed", f"Research report not found", issue_id=issue_number)
         return False
 
+    # If a valid plan already exists on disk, skip regeneration.
+    if plan_file.exists():
+        with open(plan_file, "r") as f:
+            existing_plan = f.read()
+        try:
+            _validate_plan_structure(existing_plan)
+            print(f"Valid plan already exists at {plan_file}. Skipping regeneration.")
+            log_event("hermes_plan", "success", f"Pre-existing plan reused from {plan_file}", issue_id=issue_number)
+            return True
+        except Exception:
+            print(f"Existing plan at {plan_file} failed validation. Regenerating...")
+
     with open(research_file, "r") as f:
         research_content = f.read()
 
-    prompt = f"""You are a planning agent for OSS Discovery Radar.
-Based on the provided research report, create an implementation plan for the issue.
+    # Use a rigid fill-in-the-blank template so even llama3.2:3b can produce
+    # output that passes validation without creative restructuring.
+    prompt = f"""You are a planning agent. Fill in EACH section below using information
+from the research report. Copy the section headers EXACTLY as shown. Do not rename,
+reorder, or omit any section. Do not wrap your output in a code block.
 
-Output a structured Markdown plan with the following sections exactly:
-- Goal
-- Understanding
-- Files likely to change
-- Implementation steps
-- Tests
-- Risks
-- Performance concerns
-- Compatibility concerns
-- Open questions
+## Goal
+<one sentence goal>
 
-CRITICAL INSTRUCTIONS:
-- Only plan changes; do not execute or write full code patches.
-- Distinguish [FACT], [INFERENCE], and [UNCERTAINTY] where applicable.
+## Understanding
+<brief summary of the issue>
+
+## TARGET FILES
+<list one concrete file path per line, e.g. src/test/java/...CheckTest.java>
+
+## TARGET SYMBOL
+<concrete class or method name, or N/A>
+
+## ACCEPTANCE CRITERIA
+<bullet list of concrete pass/fail criteria>
+
+## TARGETED TEST
+<exactly one shell command, no backticks, e.g. ./mvnw test -Dtest=MyTestClass>
+
+## Implementation steps
+<numbered list>
+
+## Risks
+<bullet list>
+
+## Open questions
+<bullet list or None>
 
 RESEARCH REPORT:
 {research_content}
 
-Output ONLY the Markdown plan.
+Fill in the template above. Output ONLY the filled template, no extra commentary.
 """
 
+
+    # Attempt planning
+    response = None
     try:
         response = run_hermes_oneshot(
             prompt,
@@ -577,17 +681,74 @@ Output ONLY the Markdown plan.
             model=selected_model,
             **_oneshot_provider_kwargs(provider_config),
         )
-
-        with open(plan_file, "w") as f:
-            f.write(response)
-
-        print(f"Plan saved to {plan_file}")
-        log_event("hermes_plan", "success", f"Plan complete and saved to {plan_file}", issue_id=issue_number)
-        return True
+        _validate_plan_structure(response)
     except Exception as e:
-        print(f"Plan failed: {e}")
-        log_event("hermes_plan", "failed", f"Plan failed: {str(e)}", issue_id=issue_number if 'issue_number' in locals() else None)
-        return False
+        print(f"Plan with {selected_model} failed validation or generation: {e}")
+        if selected_model != "llama3.2:3b":
+            print("Falling back to local llama3.2:3b for plan generation...")
+            selected_model = "llama3.2:3b"
+            provider_config = None
+            # llama3.2:3b copies long inputs verbatim; use a minimal prompt with
+            # truncated research so the model cannot confuse template with context.
+            short_research = research_content[:1500].rstrip()
+            if len(research_content) > 1500:
+                short_research += "\n... [research truncated] ..."
+            fallback_prompt = f"""Fill in EACH field below. Output ONLY these lines, nothing else.
+
+## Goal
+<one sentence>
+
+## Understanding
+<two sentences>
+
+## TARGET FILES
+<one concrete file path per line, e.g. src/test/java/com/puppycrawl/tools/checkstyle/checks/coding/EqualsHashCodeCheckTest.java>
+
+## TARGET SYMBOL
+<class or method name, or N/A>
+
+## ACCEPTANCE CRITERIA
+- <criterion 1>
+- <criterion 2>
+
+## TARGETED TEST
+<one shell command with no backticks, e.g. ./mvnw test -Dtest=EqualsHashCodeCheckTest>
+
+## Implementation steps
+1. <step>
+
+## Risks
+- <risk>
+
+## Open questions
+- None
+
+CONTEXT (use only to fill the fields above):
+{short_research}
+"""
+            try:
+                response = run_hermes_oneshot(
+                    fallback_prompt,
+                    safe_mode=True,
+                    model=selected_model,
+                    **_oneshot_provider_kwargs(provider_config),
+                )
+                _validate_plan_structure(response)
+            except Exception as fb_e:
+                print(f"Fallback plan also failed validation: {fb_e}\nRAW FALLBACK RESPONSE:\n{response}")
+                log_event("hermes_plan", "failed", f"Fallback plan failed: {str(fb_e)}", issue_id=issue_number)
+                return False
+        else:
+            print(f"RAW FALLBACK RESPONSE:\n{response}")
+            log_event("hermes_plan", "failed", f"Plan failed: {str(e)}", issue_id=issue_number)
+            return False
+
+    with open(plan_file, "w") as f:
+        f.write(response)
+
+    print(f"Plan saved to {plan_file}")
+    log_event("hermes_plan", "success", f"Plan complete and saved to {plan_file}", issue_id=issue_number)
+    return True
 
 def _oneshot_provider_kwargs(provider_config):
     """Map an execution-provider handoff dict onto run_hermes_oneshot() kwargs.
@@ -628,24 +789,28 @@ CRITICAL SAFETY INSTRUCTIONS:
 CRITICAL IMPLEMENTATION INSTRUCTIONS:
 - You are working in this EXACT directory: {worktree_path}
 - This is the ONLY valid workspace. All file reads and writes MUST target this exact path. Do not rely on your assumed current working directory.
-- Inspect the existing code first: find and read the relevant files, then create/modify exactly the files required by the issue.
+- 1. Inspect existing files before editing.
+- 2. Preserve unrelated content. Make the smallest possible change.
+- 3. Use targeted editor/file-edit tools (e.g. `sed`) or built-in file edit tools.
+- 4. NEVER replace an entire file unless explicitly required.
+- 5. NEVER use placeholder comments to stand in for omitted code (e.g. "// rest of file unchanged").
+- 6. Do not touch unrelated files.
+- 7. Run `git diff` and `git diff --check` before finishing to verify exactly which files were modified and that there are no whitespace errors.
 - You MUST directly create and edit files inside the {worktree_path} directory.
-- Use shell commands to write files (for example: cat > path/to/file << 'ENDOFFILE' ... ENDOFFILE), or the provided terminal/file tools if available.
 - IMPORTANT CONSTRAINTS: To execute shell commands, you MUST use the `terminal` tool with ONLY the `command` parameter. Do NOT invent parameters like `output`. Emit a valid tool call, do not ask the user for permission.
 - You MUST NOT return a patch, code block, explanation, or proposed diff as a substitute. You MUST apply the changes to the filesystem.
-- After making changes, run `git diff` and `git status` to verify exactly which files were modified before finishing.
 - Keep working until the requested implementation is actually present. Stop only after a real filesystem change exists.
 - Add/update tests where appropriate.
 
 CONTEXT:
 {context}
 
-Implement the change directly in {worktree_path} by writing the modified files using shell commands, then verify with `git diff` before finishing. If you cannot write files, stop and say so explicitly — outputting a description or patch instead of applied edits is NOT an acceptable implementation.
+Implement the change directly in {worktree_path} by writing the modified files, then verify with `git diff` before finishing. If you cannot write files, stop and say so explicitly — outputting a description or patch instead of applied edits is NOT an acceptable implementation.
 """
 
     prompt_chars = len(prompt)
     prompt_tokens = prompt_chars // 4
-    
+
     print("TELEMETRY: Implementation Prompt Metrics:")
     print(f"  - character count: {prompt_chars}")
     print(f"  - approximate token count: {prompt_tokens}")
